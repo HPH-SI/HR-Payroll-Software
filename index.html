@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HR Payroll System</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  </head>
+  <body>
+    <header class="top-bar">
+      <div class="top-bar-inner">
+        <img src="assets/Heritage_Park_Hotel_Logo__blue_-a340a593-ae1b-4c65-8813-4f78b79b6671.png" alt="Heritage Park Hotel Logo" class="top-bar-logo" />
+        <h1>HR Payroll System</h1>
+        <p class="muted"></p>
+      </div>
+    </header>
+
+    <nav class="main-nav">
+      <div class="nav-links">
+        <a href="#dashboard" data-section="dashboard">HR Dashboard</a>
+        <a href="#biometric" data-section="biometric">Biometric Device Setup</a>
+        <a href="#attendance-sheet" data-section="attendance-sheet">Attendance</a>
+        <a href="#attendance" data-section="attendance">Payroll</a>
+      </div>
+    </nav>
+
+    <main class="content">
+      <section id="dashboard" class="card">
+        <h2>HR Dashboard</h2>
+        <div class="grid three">
+          <div class="stat">
+            <h3>Active Employees</h3>
+            <p id="statEmployees">128</p>
+          </div>
+          <div class="stat">
+            <h3>Attendance Compliance</h3>
+            <p>96%</p>
+          </div>
+          <div class="stat">
+            <h3>Next Payroll Run</h3>
+            <p id="nextPayrollDate">Feb 14, 2026</p>
+          </div>
+        </div>
+        <div class="grid two">
+          <div class="panel">
+            <h3>Alerts</h3>
+            <ul>
+              <li>3 employees missing biometric enrollment.</li>
+              <li>2 attendance anomalies detected.</li>
+              <li>Payroll inputs due in 4 days.</li>
+            </ul>
+          </div>
+          <div class="panel">
+            <h3>Payroll Snapshot</h3>
+            <p>Total expected payout: <strong id="statTotalPayout">SB$ 0.00</strong></p>
+            <p>Average basic wage per hour: <strong id="statAverageWage">SB$ 0.00</strong></p>
+          </div>
+        </div>
+        <div class="dashboard-charts">
+          <label class="dashboard-chart-period">
+            Report period
+            <select id="dashboardChartPeriod"></select>
+          </label>
+          <div class="charts-grid">
+            <div class="chart-container"><h3>Taxable Earning (A) by Cost Center</h3><canvas id="chartTaxableEarning"></canvas></div>
+            <div class="chart-container"><h3>Arrears by Cost Center</h3><canvas id="chartArrears"></canvas></div>
+            <div class="chart-container"><h3>Compass/Officiate by Cost Center</h3><canvas id="chartCompass"></canvas></div>
+            <div class="chart-container"><h3>MET Leave by Cost Center</h3><canvas id="chartMetLeave"></canvas></div>
+            <div class="chart-container"><h3>Annual Leave by Cost Center</h3><canvas id="chartAnnualLeave"></canvas></div>
+            <div class="chart-container"><h3>Total Earning by Cost Center</h3><canvas id="chartTotalEarning"></canvas></div>
+            <div class="chart-container"><h3>NPF 5% by Cost Center</h3><canvas id="chartNpf5"></canvas></div>
+            <div class="chart-container"><h3>NPF 7.5% by Cost Center</h3><canvas id="chartNpf75"></canvas></div>
+            <div class="chart-container"><h3>Voluntary NPF by Cost Center</h3><canvas id="chartVoluntaryNpf"></canvas></div>
+            <div class="chart-container"><h3>Pay E (A) by Cost Center</h3><canvas id="chartPayeA"></canvas></div>
+            <div class="chart-container"><h3>Basic 1% by Cost Center</h3><canvas id="chartBasic1"></canvas></div>
+            <div class="chart-container"><h3>Other Dedu by Cost Center</h3><canvas id="chartOtherDedu"></canvas></div>
+            <div class="chart-container"><h3>Salary for Period by Cost Center</h3><canvas id="chartSalaryForPeriod"></canvas></div>
+            <div class="chart-container"><h3>Salary for Period RO by Cost Center</h3><canvas id="chartAmountRO"></canvas></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="users" class="card">
+        <div class="section-header">
+          <h2>User Management</h2>
+          <button type="button" class="primary admin-only">Add User</button>
+        </div>
+        <div class="grid three">
+          <label>
+            User Email
+            <input type="email" placeholder="user@hrhph" />
+          </label>
+          <label>
+            Role
+            <select>
+              <option>Admin</option>
+              <option>HR</option>
+            </select>
+          </label>
+          <label>
+            Status
+            <select>
+              <option>Active</option>
+              <option>Suspended</option>
+            </select>
+          </label>
+        </div>
+        <div class="button-row">
+          <button type="button" class="admin-only">Reset Password</button>
+          <button type="button" class="admin-only">Delete User</button>
+        </div>
+        <p class="hint">Only admin can add, delete, or change user passwords.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Email</th>
+                <th>Role</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="userTable">
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="biometric" class="card">
+        <h2>Biometric Device Setup</h2>
+        <p class="muted">Integrated device: Fingertech Face ID 4</p>
+        <form class="grid two" id="biometricForm">
+          <label>
+            Device IP
+            <input id="deviceIp" type="text" placeholder="192.168.10.24" />
+          </label>
+          <label>
+            Port
+            <input id="devicePort" type="number" placeholder="4370" />
+          </label>
+          <label>
+            Device Model
+            <input id="deviceModel" type="text" placeholder="Face ID 4" />
+          </label>
+          <label>
+            Device No
+            <input id="deviceNo" type="number" placeholder="1" />
+          </label>
+          <label>
+            Comm Key
+            <input id="deviceCommKey" type="number" placeholder="0" />
+          </label>
+          <label>
+            Bridge URL (Windows SDK)
+            <input
+              id="bridgeUrl"
+              type="text"
+              placeholder="http://192.168.1.50:5001"
+            />
+          </label>
+          <label>
+            Device ID
+            <input id="deviceId" type="text" placeholder="FT-FACEID-4-001" />
+          </label>
+          <label>
+            Sync Interval (minutes)
+            <input id="syncInterval" type="number" placeholder="15" />
+          </label>
+          <label>
+            Username
+            <input id="deviceUser" type="text" placeholder="admin" />
+          </label>
+          <label>
+            Password
+            <input id="devicePassword" type="password" placeholder="••••••" />
+          </label>
+          <label>
+            Connection Status
+            <select id="connectionStatus">
+              <option>Offline</option>
+              <option>Online</option>
+            </select>
+          </label>
+          <label>
+            Enrollment Mode
+            <select id="enrollmentMode">
+              <option>Face ID</option>
+              <option>Face + PIN</option>
+              <option>Face + Card</option>
+            </select>
+          </label>
+          <div class="button-row">
+            <button id="saveBiometric" type="button" class="primary">
+              Save Configuration
+            </button>
+            <button id="testBiometric" type="button">Test Connection</button>
+            <button id="syncEmployees" type="button">Sync Employees</button>
+            <button id="syncAttendance" type="button">Sync Attendance</button>
+          </div>
+          <p id="biometricMessage" class="hint">No device configured.</p>
+        </form>
+      </section>
+
+      <section id="attendance-sheet" class="card">
+        <h2>Attendance</h2>
+        <div class="grid two">
+          <label>
+            Fortnight Period (2026)
+            <select id="attendanceSheetFortnight"></select>
+          </label>
+          <label>
+            Cost Center
+            <select id="attendanceSheetCostCenter">
+              <option value="">All</option>
+            </select>
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="syncAttendanceSheet" type="button">Sync Employees & Attendance</button>
+          <button id="loadAttendanceSheet" type="button">Load Attendance</button>
+        </div>
+        <p id="attendanceSheetMessage" class="hint">Manual entries are saved automatically to browser and server. Data persists across refreshes and app updates.</p>
+        <div class="table-wrap attendance-sheet-wrap">
+          <table class="attendance-sheet-table">
+            <thead>
+              <tr id="attendanceSheetHeaderRow">
+                <th>Ee #</th>
+                <th>Names</th>
+                <th>Cost Center</th>
+              </tr>
+            </thead>
+            <tbody id="attendanceSheetTable">
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="attendance" class="card">
+        <h2>Payroll</h2>
+        <div class="grid two">
+          <label>
+            Fortnight Period (2026)
+            <select id="attendanceFortnight"></select>
+          </label>
+        </div>
+        <div class="payroll-filters-row">
+          <label>Cost Center <select id="payrollCostCenter"><option value="">All</option></select></label>
+          <label>Taxable Earning (A) <select id="filterTaxable"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Arrears <select id="filterArrears"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Compass/Officiate <select id="filterCompass"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>MET Leave <select id="filterMetLeave"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Annual Leave <select id="filterAnnualLeave"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Total Earning <select id="filterTotalEarning"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>NPF 5% <select id="filterNpf5"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>NPF 7.5% <select id="filterNpf75"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Voluntary NPF <select id="filterVoluntaryNpf"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Pay E (A) <select id="filterPaye"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Basic 1% <select id="filterBasic1"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Other Dedu <select id="filterOtherDedu"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+          <label>Salary for Period RO <select id="filterSalaryForRo"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
+        </div>
+        <div class="button-row">
+          <button id="loadAttendanceLogs" type="button">Load Logs</button>
+          <button id="downloadAllLogsExcel" type="button">Download All Excel</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Employee Id</th>
+                <th>Download</th>
+                <th>Employee Name</th>
+                <th>Cost Center</th>
+                <th>NPF Number</th>
+                <th>BSP Account</th>
+                <th>Basic Wage/hr</th>
+                <th>Housing all/hr</th>
+                <th>Basic Salary</th>
+                <th>OT Salary</th>
+                <th>PH x 2</th>
+                <th>Housing Allowance</th>
+                <th>Taxable Earning (A)</th>
+                <th>Arrears</th>
+                <th>Compass/Officiate</th>
+                <th>MET Leave</th>
+                <th>Annual Leave</th>
+                <th>Total Earning</th>
+                <th>NPF 5%</th>
+                <th>NPF 7.5%</th>
+                <th>Voluntary NPF</th>
+                <th>Pay E (A)</th>
+                <th>Basic 1%</th>
+                <th>Other Dedu</th>
+                <th>Salary for Period</th>
+                <th>Salary for Period RO</th>
+              </tr>
+            </thead>
+            <tbody id="attendanceTable">
+            </tbody>
+          </table>
+        </div>
+        <div class="button-row">
+          <button id="attendancePrev" type="button">Previous</button>
+          <span id="attendancePageInfo" class="hint">Page 1</span>
+          <button id="attendanceNext" type="button">Next</button>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="footer">
+      <p>HR Payroll System · Fingertech Face ID 4 integration ready</p>
+    </footer>
+
+    <script src="app.js"></script>
+  </body>
+</html>

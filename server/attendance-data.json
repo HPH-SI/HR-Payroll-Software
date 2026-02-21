@@ -1,0 +1,26 @@
+[
+  {
+    "employeeId": "EMP-0001",
+    "date": "2026-02-02",
+    "time": "08:02",
+    "verify": "Face",
+    "inOut": "In",
+    "workCode": "0"
+  },
+  {
+    "employeeId": "EMP-0001",
+    "date": "2026-02-02",
+    "time": "17:03",
+    "verify": "Face",
+    "inOut": "Out",
+    "workCode": "0"
+  },
+  {
+    "employeeId": "EMP-0002",
+    "date": "2026-02-02",
+    "time": "08:15",
+    "verify": "Face",
+    "inOut": "In",
+    "workCode": "0"
+  }
+]

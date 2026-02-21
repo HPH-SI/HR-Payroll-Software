@@ -1,0 +1,17 @@
+{
+  "deviceIp": "192.168.1.111",
+  "devicePort": 4370,
+  "deviceModel": "Face ID 4",
+  "deviceNo": 1,
+  "deviceCommKey": 0,
+  "bridgeUrl": "http://localhost:5001",
+  "mdbPath": "C:\\Program Files (x86)\\FingerTec\\FingerTec TCMS V3\\TCMS V3\\ingress.mdb",
+  "mdbPassword": "ingress",
+  "deviceId": "FT-FACEID-4-001",
+  "syncInterval": 15,
+  "deviceUser": "admin",
+  "devicePassword": "123",
+  "connectionStatus": "Offline",
+  "enrollmentMode": "Face ID",
+  "lastSyncAt": null
+}
