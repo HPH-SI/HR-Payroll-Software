@@ -1,0 +1,245 @@
+/**
+ * Apply manual HHS overrides for fortnight 2026-01-05 .. 2026-01-18.
+ * Blank cells in the source list -> hhs: null (payroll uses Normal×0.5 for eligible CC).
+ * Explicit 0 is stored as 0.
+ */
+const fs = require("fs");
+const path = require("path");
+
+const FORTNIGHT = "2026-01-05_2026-01-18";
+const SHEET = path.join(__dirname, "..", "server", "attendance-sheet-manual.json");
+const DEVICE = path.join(__dirname, "..", "server", "device-data.json");
+
+const RAW = `TANEKO Sandra	45
+MILTON Ellen	41
+ARUOMEA Christina	
+SUIMAEA, Rachel S. 	
+RUKUIWAQA Moffat	
+FANASIA, Gretal 	43.75
+RUKASI, Florence	
+SIUNARII, Alison	45
+OGE, Marvin	
+PENIOP Clement	
+NAPS Patteson	41.25
+TOVAGETO Derrick	
+TALUASI Elizabeth	45
+LEGUMANA Titus	
+BUNIA Cleophas	45
+BELIGA Jenny	45
+JULIAN Salote	33.5
+MANU Rose	18.75
+RIKO Annette	22.5
+BELO Alick	22.5
+NE'E Glenda	
+ADI Joana	
+HAMBALU Lorina	33.75
+KWANAFIA Lovelyn	
+TATAU Enest	45
+LONGANIMALA Ben	
+Kuper Yvonne	
+ANISI Celesty	
+PITUMANA Madlyn	37.5
+WAKI Frank 	
+GAROSEPI FAY Veronica	45
+SIATA ALICK EDDIMOND 	44.25
+LUI Philip 	
+TALAI Martin 	
+IDU Pricilla	40.75
+Sina Selina	
+Halumae Muriel	
+Kwanga Esther	
+Alatala Grace Evalyn	
+Kala Jessy 	44.25
+Hikinao Dalcy 	
+Baulo John	40.75
+Spillius Balinda	
+Ngivalasi Neverlyn 	
+Junior Elifau Eddie 	
+Ramofafia David 	
+Seimoana Elizabeth 	
+Kasukea Weape Meverlyn 	
+Fiku Siapu Florence 	
+Ino Sylvia 	45
+Futia Maery	
+Walani Sheila	
+Parkinson Moses 	45
+Aigah Jerol	
+Faifu Kate	
+Mara Joy Hadassah	
+Nisha Joy 	
+Roko Joyce	44.5
+Salu Linma	
+Pavu N Salina 	45
+Maehorana Renetta 	
+Luis Marion	
+Noli M Mary	
+Hou Rose Diana	
+Hasi Delma	
+Toku Odikana 	
+Tiba John 	
+Anilafa Amasia Davy	
+Mena'a Margaret	
+Masura Hellen	
+O'oi Jerlyn	45
+Vuthia Ngelea Bounty	
+Honihuitoro Lovelyn	
+Sorumana Don 	
+Hadobola Augustine 	
+Afia Anisca	
+Batalididi Joycelyn 	41
+Moale Jenny	
+Gordon Doncy	
+Sunaone Daledan Chris	
+Gasibule Zebrina Joy	
+Leni Simon Junior	
+Basu Ivory	
+Ariki Bareth 	
+Muiri'i Marisha 	
+Kalae Junior	
+Saeve Rosina	
+Anilafa Oge Adon 	
+Makania Esther 	45
+Kiini Barbra 	0
+Ruru Rose	
+Kemangava Pretty Lovelyn	
+Donga Eddie Alisha	
+Gu'ufo'oa Jnr Jock	33.75
+Maite Austin	45
+Ieva Helmah	
+Baniatawa Kramon	
+Fiulawa Niute'e Jimmy 	
+Uiga Sarah 	
+Nerry Jossephil	
+Rau Samantha	
+Fernandez Betotina Marguerita	
+Kuper Koi Robert	
+Nasihunu Varinah 	
+Kanaoli Jerolyn	
+Lago Hansol	
+Elson Hezishel	
+Tepai Ninah	
+Nego Joddy	
+Tekosi Bravelyn	
+Riitefia Justin 	30
+Waiwori Lynette	
+Titiri Simmy	
+Mesepitu Tarepala Tonia	
+Deve Haoia Gloria	45
+Siau Tracy	45
+Takarii Margret	45
+Roosevelt Genesis	33.75
+Melapi Junior	
+Ekotani Kefa William	
+Elega John	
+Monohoru Senrose	45
+Honi Greyleen	
+Parangaina William	
+Lio Ella	
+Sara Cecilia	
+Hivapule Rodney	45
+Pio Dava Frank Junior	
+Rasini Fagana Susan	45
+Vaeto Cranolyn	
+Panda Clinton	45
+Hadosaia Greyleen	
+Ouou Stacey	
+Kala Doreen	11
+Papage Barbra	45
+Dao Piqu Florence	
+Mamata Jordan	26.25`;
+
+function normName(s) {
+  return String(s || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function parseRows(raw) {
+  const out = [];
+  for (const line of raw.split("\n")) {
+    const t = line.trimEnd();
+    if (!t.trim()) continue;
+    let name;
+    let numStr = "";
+    if (t.includes("\t")) {
+      const p = t.split("\t");
+      name = p[0].trim();
+      numStr = (p[1] || "").trim();
+    } else {
+      const m = t.match(/^(.+?)\s+(\d+(?:\.\d+)?)\s*$/);
+      if (m) {
+        name = m[1].trim();
+        numStr = m[2];
+      } else {
+        name = t.trim();
+      }
+    }
+    let hhs = null;
+    if (numStr !== "") {
+      const n = Number(numStr);
+      if (!Number.isFinite(n)) {
+        console.warn("Bad number for", name, numStr);
+      } else {
+        hhs = n;
+      }
+    }
+    out.push({ name, hhs });
+  }
+  return out;
+}
+
+const employees = JSON.parse(fs.readFileSync(DEVICE, "utf8"));
+const byNorm = new Map();
+for (const e of employees) {
+  const n = normName(e.names);
+  if (byNorm.has(n)) {
+    console.warn("Duplicate name in device-data:", n);
+  }
+  byNorm.set(n, String(e.employeeId));
+}
+
+const sheet = JSON.parse(fs.readFileSync(SHEET, "utf8"));
+const block = sheet[FORTNIGHT];
+if (!block || typeof block !== "object") {
+  console.error("Missing fortnight", FORTNIGHT);
+  process.exit(1);
+}
+
+const rows = parseRows(RAW);
+let updated = 0;
+const missing = [];
+const noRow = [];
+
+for (const { name, hhs } of rows) {
+  const id = byNorm.get(normName(name));
+  if (!id) {
+    missing.push(name);
+    continue;
+  }
+  const entry = block[id];
+  if (!entry) {
+    noRow.push({ name, id });
+    continue;
+  }
+  if (hhs === null) {
+    delete entry.hhs;
+  } else {
+    entry.hhs = hhs;
+  }
+  updated++;
+}
+
+fs.writeFileSync(SHEET, JSON.stringify(sheet, null, 2) + "\n", "utf8");
+
+console.log("Fortnight:", FORTNIGHT);
+console.log("Rows in list:", rows.length);
+console.log("Updated:", updated);
+if (missing.length) {
+  console.log("Names not in device-data:", missing.length);
+  missing.forEach((m) => console.log("  -", m));
+}
+if (noRow.length) {
+  console.log("No attendance row for id (skipped):");
+  noRow.forEach((x) => console.log("  -", x.name, x.id));
+}

@@ -50,6 +50,52 @@ const readDeviceData = () => {
   }
 };
 
+/** Normalize IDs so "01053" and "1053" map to the same employee for merge/upsert. */
+const normalizeEmployeeIdKey = (raw) => {
+  const id = String(raw ?? "").trim();
+  if (!id) return "";
+  const stripped = id.replace(/^0+(?=\d)/, "") || id;
+  return stripped;
+};
+
+/** Prefer existing HR data (manual edits, scripts, imports); device only fills gaps. */
+const preferLocalString = (incoming, existing) => {
+  const ex = existing != null ? String(existing).trim() : "";
+  if (ex !== "") return ex;
+  if (incoming == null) return "";
+  return String(incoming).trim();
+};
+
+/**
+ * Upsert incoming sync rows into existing device-data. Previously we only stored
+ * `mergedIncoming`, which dropped any employee not returned by the bridge (e.g. caps
+ * at ~1052), breaking payroll for higher employee numbers.
+ */
+const mergeEmployeeLists = (existingList, incomingMerged) => {
+  const byKey = new Map();
+  (existingList || []).forEach((emp) => {
+    const k = normalizeEmployeeIdKey(emp.employeeId);
+    if (!k) return;
+    byKey.set(k, { ...emp });
+  });
+  (incomingMerged || []).forEach((emp) => {
+    const k = normalizeEmployeeIdKey(emp.employeeId);
+    if (!k) return;
+    const prev = byKey.get(k) || {};
+    byKey.set(k, { ...prev, ...emp });
+  });
+  const merged = [...byKey.values()];
+  merged.sort((a, b) => {
+    const sa = String(a.employeeId ?? "").trim();
+    const sb = String(b.employeeId ?? "").trim();
+    const na = Number(normalizeEmployeeIdKey(sa));
+    const nb = Number(normalizeEmployeeIdKey(sb));
+    if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+    return sa.localeCompare(sb, undefined, { numeric: true });
+  });
+  return merged;
+};
+
 const readAttendanceData = () => {
   try {
     const raw = fs.readFileSync(ATTENDANCE_DATA_PATH, "utf-8");
@@ -57,6 +103,94 @@ const readAttendanceData = () => {
   } catch (error) {
     return [];
   }
+};
+
+const toLocalIsoDate = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+/** Same Jan 5 anchor as the payroll UI (26 fortnights per year). */
+const getFortnightAnchorStartDate = () => {
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  let y = today.getFullYear();
+  let start = new Date(y, 0, 5);
+  if (today < start) y -= 1;
+  start = new Date(y, 0, 5);
+  const endOfSchedule = new Date(start);
+  endOfSchedule.setDate(start.getDate() + 26 * 14 - 1);
+  if (today > endOfSchedule) {
+    y += 1;
+    start = new Date(y, 0, 5);
+  }
+  return start;
+};
+
+/** Start date (YYYY-MM-DD) of the fortnight that contains today. */
+const getCurrentFortnightStartIso = () => {
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  const anchor = getFortnightAnchorStartDate();
+  for (let i = 0; i < 26; i += 1) {
+    const periodStart = new Date(anchor);
+    periodStart.setDate(anchor.getDate() + i * 14);
+    periodStart.setHours(12, 0, 0, 0);
+    const periodEnd = new Date(periodStart);
+    periodEnd.setDate(periodStart.getDate() + 13);
+    periodEnd.setHours(12, 0, 0, 0);
+    if (today >= periodStart && today <= periodEnd) {
+      return toLocalIsoDate(periodStart);
+    }
+  }
+  return toLocalIsoDate(anchor);
+};
+
+const normalizeLogDateString = (raw) => {
+  const s = String(raw ?? "").trim();
+  const iso = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const dmy = /^(\d{2})-(\d{2})-(\d{4})$/.exec(s);
+  if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  return "";
+};
+
+/**
+ * Keep device logs for dates before the current fortnight; merge incoming
+ * from the current fortnight start onward so sync does not wipe history.
+ */
+const mergeAttendanceLogsForSync = (existing, incoming, cutoffIso) => {
+  const incomingList = Array.isArray(incoming) ? incoming : [];
+  const existingList = Array.isArray(existing) ? existing : [];
+  const preserved = existingList.filter((log) => {
+    const d = normalizeLogDateString(log?.date);
+    if (!d) return true;
+    return d < cutoffIso;
+  });
+  const fromIncoming = incomingList.filter((log) => {
+    const d = normalizeLogDateString(log?.date);
+    if (!d) return false;
+    return d >= cutoffIso;
+  });
+  return [...preserved, ...fromIncoming];
+};
+
+const mergeAttendanceTableRowsForSync = (existing, incoming, cutoffIso) => {
+  const incomingList = Array.isArray(incoming) ? incoming : [];
+  const existingList = Array.isArray(existing) ? existing : [];
+  const preserved = existingList.filter((row) => {
+    const d = normalizeLogDateString(row?.date);
+    if (!d) return true;
+    return d < cutoffIso;
+  });
+  const fromIncoming = incomingList.filter((row) => {
+    const d = normalizeLogDateString(row?.date);
+    if (!d) return false;
+    return d >= cutoffIso;
+  });
+  return [...preserved, ...fromIncoming];
 };
 
 const readAttendanceTableData = () => {
@@ -130,13 +264,17 @@ const storeEmployeesData = async (employees) => {
 };
 
 const storeAttendanceData = async (logs) => {
-  fs.writeFileSync(ATTENDANCE_DATA_PATH, JSON.stringify(logs || [], null, 2));
-  return logs ? logs.length : 0;
+  const cutoff = getCurrentFortnightStartIso();
+  const merged = mergeAttendanceLogsForSync(readAttendanceData(), logs, cutoff);
+  fs.writeFileSync(ATTENDANCE_DATA_PATH, JSON.stringify(merged, null, 2));
+  return merged.length;
 };
 
 const storeAttendanceTableData = async (rows) => {
-  fs.writeFileSync(ATTENDANCE_TABLE_PATH, JSON.stringify(rows || [], null, 2));
-  return rows ? rows.length : 0;
+  const cutoff = getCurrentFortnightStartIso();
+  const merged = mergeAttendanceTableRowsForSync(readAttendanceTableData(), rows, cutoff);
+  fs.writeFileSync(ATTENDANCE_TABLE_PATH, JSON.stringify(merged, null, 2));
+  return merged.length;
 };
 
 const collectJson = (req) =>
@@ -312,42 +450,67 @@ const server = http.createServer(async (req, res) => {
       if (bridge.ok && bridge.data && bridge.data.status === "success") {
         const incomingEmployees = bridge.data.employees || [];
         const existingEmployees = readDeviceData();
-        const existingById = new Map(
-          (existingEmployees || []).map((employee) => [
-            String(employee.employeeId || ""),
-            employee,
-          ])
-        );
+        const existingById = new Map();
+        (existingEmployees || []).forEach((employee) => {
+          const id = String(employee.employeeId || "").trim();
+          if (id) existingById.set(id, employee);
+          const numId = id.replace(/^0+/, "") || id;
+          if (numId && !existingById.has(numId)) existingById.set(numId, employee);
+        });
+        const findExisting = (emp) => {
+          const id = String(emp.employeeId || "").trim();
+          return existingById.get(id) || existingById.get(id.replace(/^0+/, "") || id) || {};
+        };
         const mergedIncoming = incomingEmployees.map((employee) => {
-          const existing = existingById.get(String(employee.employeeId || "")) || {};
+          const existing = findExisting(employee);
           return {
+            ...existing,
             ...employee,
-            basicWage: employee.basicWage || existing.basicWage || "",
-            hAllow: employee.hAllow || existing.hAllow || "",
-            npf: employee.npf || existing.npf || "",
-            bsp: employee.bsp || existing.bsp || "",
+            employeeId: employee.employeeId ?? existing.employeeId,
+            names: preferLocalString(employee.names, existing.names),
+            costCenter: preferLocalString(employee.costCenter, existing.costCenter),
+            department: preferLocalString(
+              employee.department,
+              existing.department || existing.costCenter
+            ),
+            basicWage: preferLocalString(employee.basicWage, existing.basicWage),
+            hAllow: preferLocalString(employee.hAllow, existing.hAllow),
+            npf: preferLocalString(employee.npf, existing.npf),
+            bsp: preferLocalString(employee.bsp, existing.bsp),
+            startDate: preferLocalString(employee.startDate, existing.startDate),
+            shift: preferLocalString(employee.shift, existing.shift),
+            status: preferLocalString(employee.status, existing.status) || "Active",
+            arrears: preferLocalString(employee.arrears, existing.arrears),
+            compass: preferLocalString(employee.compass, existing.compass),
+            voluntaryNpf: preferLocalString(employee.voluntaryNpf, existing.voluntaryNpf),
+            rentAllowance: preferLocalString(employee.rentAllowance, existing.rentAllowance),
+            otherDeductions: preferLocalString(
+              employee.otherDeductions,
+              existing.otherDeductions
+            ),
           };
         });
-        const employeesToUse =
-          mergedIncoming.length > 0 ? mergedIncoming : existingEmployees;
         const updatedConfig = {
           ...config,
           lastSyncAt:
             bridge.data.lastSyncAt || new Date().toISOString(),
         };
         writeConfig(updatedConfig);
+        let employeesToUse = existingEmployees;
+        let storedCount = 0;
         if (mergedIncoming.length > 0) {
-          await storeEmployeesData(mergedIncoming);
+          employeesToUse = mergeEmployeeLists(existingEmployees, mergedIncoming);
+          storedCount = await storeEmployeesData(employeesToUse);
         }
         sendJson(res, 200, {
           status: "success",
           message:
             mergedIncoming.length > 0
-              ? `Employees synced from BioBridge (${mergedIncoming.length} records).`
+              ? `Employees synced from BioBridge (${mergedIncoming.length} incoming; ${employeesToUse.length} total stored).`
               : "No employees from DB. Using existing local data. Check mdbPath and table in ingress.mdb.",
           employees: employeesToUse,
           lastSyncAt: updatedConfig.lastSyncAt,
-          storedEmployees: mergedIncoming.length,
+          storedEmployees: storedCount,
         });
         return;
       }
@@ -656,7 +819,8 @@ const server = http.createServer(async (req, res) => {
         const pageLogs = allLogs.slice(0, pageSize);
         sendJson(res, 200, {
           status: "success",
-          message: "Attendance logs synced from BioBridge SDK service.",
+          message:
+            "Attendance logs synced from BioBridge. Merged from the current fortnight onward; older dates on the server are kept.",
           logs: pageLogs,
           totalCount: allLogs.length,
           page: 1,

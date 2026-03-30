@@ -318,9 +318,12 @@ th {
   color: #64748b;
 }
 
+/* Scroll both ways; sticky header + frozen Ee / Names / Cost Center */
 .attendance-sheet-wrap {
-  overflow-x: auto;
+  overflow: auto;
+  max-height: min(78vh, 960px);
   -webkit-overflow-scrolling: touch;
+  position: relative;
 }
 
 .attendance-sheet-table th,
@@ -334,19 +337,82 @@ th {
   vertical-align: middle;
 }
 
-.attendance-sheet-table th:first-child,
-.attendance-sheet-table td:first-child,
-.attendance-sheet-table th:nth-child(2),
-.attendance-sheet-table td:nth-child(2),
-.attendance-sheet-table th:nth-child(3),
-.attendance-sheet-table td:nth-child(3),
-.attendance-sheet-table th:nth-child(4),
-.attendance-sheet-table td:nth-child(4),
-.attendance-sheet-table th:nth-child(5),
-.attendance-sheet-table td:nth-child(5) {
-  max-width: 90px;
-  min-width: 70px;
+/* Fixed widths for first 3 cols (must match sticky `left` offsets below) */
+.attendance-sheet-table th:nth-child(1),
+.attendance-sheet-table td:nth-child(1) {
+  min-width: 4.5rem;
+  max-width: 5.25rem;
+  width: 4.5rem;
+  box-sizing: border-box;
   font-size: 0.85rem;
+}
+.attendance-sheet-table th:nth-child(2),
+.attendance-sheet-table td:nth-child(2) {
+  min-width: 7rem;
+  max-width: 10rem;
+  width: 7.5rem;
+  box-sizing: border-box;
+  font-size: 0.85rem;
+}
+.attendance-sheet-table th:nth-child(3),
+.attendance-sheet-table td:nth-child(3) {
+  min-width: 5rem;
+  max-width: 6.5rem;
+  width: 5.25rem;
+  box-sizing: border-box;
+  font-size: 0.85rem;
+}
+
+/* Sticky thead (all columns) */
+.attendance-sheet-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #eff6ff;
+  background-clip: padding-box;
+}
+
+/* Sticky top + left: header corner cells */
+.attendance-sheet-table thead th:nth-child(1) {
+  left: 0;
+  z-index: 6;
+  box-shadow: 1px 0 0 #e2e8f0, 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+}
+.attendance-sheet-table thead th:nth-child(2) {
+  left: 4.5rem;
+  z-index: 6;
+  box-shadow: 1px 0 0 #e2e8f0, 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+}
+.attendance-sheet-table thead th:nth-child(3) {
+  left: 12rem;
+  z-index: 6;
+  box-shadow: 4px 0 8px -4px rgba(15, 23, 42, 0.12), 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+}
+
+/* Frozen body cells */
+.attendance-sheet-table tbody td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+  background-clip: padding-box;
+  box-shadow: 1px 0 0 #f1f5f9;
+}
+.attendance-sheet-table tbody td:nth-child(2) {
+  position: sticky;
+  left: 4.5rem;
+  z-index: 2;
+  background: #fff;
+  background-clip: padding-box;
+  box-shadow: 1px 0 0 #f1f5f9;
+}
+.attendance-sheet-table tbody td:nth-child(3) {
+  position: sticky;
+  left: 12rem;
+  z-index: 2;
+  background: #fff;
+  background-clip: padding-box;
+  box-shadow: 4px 0 8px -4px rgba(15, 23, 42, 0.1);
 }
 
 .attendance-sheet-table th.attendance-sunday {
@@ -397,10 +463,8 @@ th {
 .attendance-sheet-table .attendance-phdo-input,
 .attendance-sheet-table .attendance-phpay-input,
 .attendance-sheet-table .attendance-sick-input,
-.attendance-sheet-table .attendance-compassionate-input,
 .attendance-sheet-table .attendance-metleave-input,
-.attendance-sheet-table .attendance-annualleave-input,
-.attendance-sheet-table .attendance-conveyance-input {
+.attendance-sheet-table .attendance-annualleave-input {
   width: 48px;
   max-width: 48px;
   padding: 4px 6px;
@@ -410,26 +474,83 @@ th {
   box-sizing: border-box;
 }
 
-.attendance-sheet-table .attendance-download-cell {
-  white-space: nowrap;
-  padding: 4px 6px;
+/* HHS & Conveyance: wider columns, boxed inputs — numbers must not clip */
+.attendance-sheet-table th.attendance-col-hhs,
+.attendance-sheet-table td.attendance-cell-hhs {
+  min-width: 7rem;
+  max-width: none;
+  width: 7.5rem;
+  padding: 8px 10px;
+  vertical-align: middle;
 }
 
-.attendance-sheet-table .attendance-sheet-download-excel,
-.attendance-sheet-table .attendance-sheet-download-pdf {
-  display: inline-block;
-  margin: 2px 3px;
-  padding: 4px 8px;
-  font-size: 0.7rem;
-  border-radius: 6px;
-  border: 1px solid #e2e8f0;
-  background: #fff;
-  cursor: pointer;
+.attendance-sheet-table th.attendance-col-conveyance,
+.attendance-sheet-table td.attendance-cell-conveyance {
+  min-width: 7.5rem;
+  max-width: none;
+  width: 8rem;
+  padding: 8px 10px;
+  vertical-align: middle;
 }
 
-.attendance-sheet-table .attendance-sheet-download-excel:hover,
-.attendance-sheet-table .attendance-sheet-download-pdf:hover {
+.attendance-sheet-table .attendance-money-box {
+  display: block;
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
   background: #f8fafc;
+  overflow: hidden;
+  min-height: 2.5rem;
+}
+
+.attendance-sheet-table .attendance-money-box--hhs {
+  border-color: #93c5fd;
+  background: linear-gradient(180deg, #eff6ff 0%, #f8fafc 100%);
+}
+
+.attendance-sheet-table .attendance-money-box--conveyance {
+  border-color: #6ee7b7;
+  background: linear-gradient(180deg, #ecfdf5 0%, #f8fafc 100%);
+}
+
+.attendance-sheet-table .attendance-hhs-input,
+.attendance-sheet-table .attendance-conveyance-input {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  padding: 10px 12px;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-sizing: border-box;
+  -moz-appearance: textfield;
+}
+
+.attendance-sheet-table .attendance-conveyance-input[readonly] {
+  cursor: default;
+  color: #0f172a;
+  user-select: none;
+}
+
+.attendance-sheet-table .attendance-hhs-input::-webkit-outer-spin-button,
+.attendance-sheet-table .attendance-hhs-input::-webkit-inner-spin-button,
+.attendance-sheet-table .attendance-conveyance-input::-webkit-outer-spin-button,
+.attendance-sheet-table .attendance-conveyance-input::-webkit-inner-spin-button {
+  height: auto;
+  opacity: 1;
+}
+
+.attendance-sheet-table .attendance-hhs-input:focus,
+.attendance-sheet-table .attendance-conveyance-input:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(59, 130, 246, 0.45);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.attendance-sheet-table td.attendance-cell-conveyance .attendance-conveyance-input:focus {
+  box-shadow: inset 0 0 0 2px rgba(16, 185, 129, 0.45);
 }
 
 .attendance-sheet-table th.attendance-extra-col {
@@ -458,29 +579,38 @@ th {
   line-height: 1.25;
 }
 
-.payroll-filters-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 20px;
-  margin: 12px 0;
-  padding: 12px;
-  background: #f8fafc;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
+.attendance-sheet-table td.attendance-day-cell {
+  vertical-align: top;
+  padding: 6px 4px;
+  min-width: 52px;
 }
 
-.payroll-filters-row label {
+.attendance-sheet-table .attendance-day-stack {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.85rem;
-  white-space: nowrap;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
 }
 
-.payroll-filters-row label select {
-  padding: 6px 10px;
-  font-size: 0.9rem;
-  min-width: 90px;
+.attendance-sheet-table .attendance-day-stack .attendance-day-input {
+  width: 100%;
+  max-width: 3.25rem;
+  min-width: 0;
+  padding: 4px 4px;
+  font-size: 0.8rem;
+  box-sizing: border-box;
+}
+
+.attendance-sheet-table .attendance-conveyance-tier-select {
+  width: 100%;
+  max-width: 3.25rem;
+  min-width: 0;
+  padding: 2px 2px;
+  font-size: 0.72rem;
+  border-radius: 4px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  box-sizing: border-box;
 }
 
 .dashboard-charts {
@@ -489,8 +619,20 @@ th {
   border-top: 1px solid #e2e8f0;
 }
 
-.dashboard-chart-period {
+.dashboard-chart-period-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
   margin-bottom: 16px;
+}
+
+.dashboard-chart-period-row .primary {
+  margin-top: 0;
+}
+
+.dashboard-chart-period {
+  margin-bottom: 0;
 }
 
 .dashboard-chart-period select {
@@ -971,11 +1113,25 @@ table {
   font-size: 0.95rem;
 }
 
-.payroll-voluntarynpf-input {
+.payroll-voluntarynpf-input,
+.payroll-otherdedu-input {
   width: 64px;
   max-width: 80px;
   padding: 4px 6px;
   font-size: 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+
+/* Compact like adjacent amount cells (e.g. Housing Allowance); wide enough for values like 2083.50 */
+.payroll-rent-input {
+  width: 90px;
+  max-width: 100px;
+  min-height: 0;
+  padding: 4px 6px;
+  font-size: 0.85rem;
+  line-height: 1.25;
   border: 1px solid #e2e8f0;
   border-radius: 6px;
   box-sizing: border-box;
@@ -993,10 +1149,323 @@ th {
   font-weight: 700;
 }
 
+#attendance .table-wrap .payroll-table-tfoot {
+  border-top: 2px solid #94a3b8;
+}
+
+#attendance .table-wrap .payroll-totals-row td {
+  background: #eef2f7;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+#attendance .table-wrap .payroll-totals-label {
+  text-align: right;
+  vertical-align: middle;
+}
+
+/* Payroll grid: scroll + sticky header + frozen Id / Name / Cost Center */
+#attendance .table-wrap {
+  --payroll-fz-col1: 7rem;
+  --payroll-fz-col2: 11rem;
+  --payroll-fz-col3: 8rem;
+  --payroll-fz-left2: var(--payroll-fz-col1);
+  --payroll-fz-left3: calc(var(--payroll-fz-col1) + var(--payroll-fz-col2));
+  overflow: auto;
+  max-height: min(78vh, 960px);
+  -webkit-overflow-scrolling: touch;
+  position: relative;
+}
+
+/* Wider than viewport → horizontal scroll; fixed layout + explicit col widths stop digit overlap */
+#attendance .table-wrap table {
+  table-layout: fixed;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
+}
+
+/* Numeric / text columns from NPF onward — ~6rem each so values don’t stack on each other */
+#attendance .table-wrap table thead th:nth-child(n + 4),
+#attendance .table-wrap table tbody td:nth-child(n + 4) {
+  width: 7rem;
+  min-width: 7rem;
+  max-width: 9.5rem;
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+#attendance .table-wrap table tbody td:nth-child(n + 4) {
+  text-align: right;
+}
+
+#attendance .table-wrap table thead th:nth-child(n + 4) {
+  text-align: center;
+  vertical-align: bottom;
+}
+
+/* Footer row: align with body columns; allow totals to show full numbers */
+#attendance .table-wrap table tfoot td:first-child {
+  min-width: calc(
+    var(--payroll-fz-col1) + var(--payroll-fz-col2) + var(--payroll-fz-col3) + 14rem
+  );
+  width: calc(
+    var(--payroll-fz-col1) + var(--payroll-fz-col2) + var(--payroll-fz-col3) + 14rem
+  );
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+#attendance .table-wrap table tfoot td:not(:first-child) {
+  width: 7rem;
+  min-width: 7rem;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Keep totals visible while scrolling vertically */
+#attendance .table-wrap table tfoot td {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  background: #eef2f7;
+  box-shadow: 0 -3px 10px rgba(15, 23, 42, 0.12);
+}
+
+#attendance .table-wrap table tfoot td:first-child {
+  left: 0;
+  z-index: 7;
+  box-shadow: 4px 0 8px -4px rgba(15, 23, 42, 0.1), 0 -3px 10px rgba(15, 23, 42, 0.12);
+}
+
+#attendance .table-wrap table th:nth-child(1),
+#attendance .table-wrap table td:nth-child(1) {
+  width: var(--payroll-fz-col1);
+  min-width: var(--payroll-fz-col1);
+  max-width: var(--payroll-fz-col1);
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#attendance .table-wrap table th:nth-child(2),
+#attendance .table-wrap table td:nth-child(2) {
+  width: var(--payroll-fz-col2);
+  min-width: var(--payroll-fz-col2);
+  max-width: var(--payroll-fz-col2);
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#attendance .table-wrap table th:nth-child(3),
+#attendance .table-wrap table td:nth-child(3) {
+  width: var(--payroll-fz-col3);
+  min-width: var(--payroll-fz-col3);
+  max-width: var(--payroll-fz-col3);
+  box-sizing: border-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#attendance .table-wrap table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #eaf1fb;
+  background-clip: padding-box;
+}
+
+#attendance .table-wrap table thead th:nth-child(1) {
+  left: 0;
+  z-index: 6;
+  box-shadow: 1px 0 0 #e2e8f5, 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+}
+#attendance .table-wrap table thead th:nth-child(2) {
+  left: var(--payroll-fz-left2);
+  z-index: 6;
+  box-shadow: 1px 0 0 #e2e8f5, 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+}
+#attendance .table-wrap table thead th:nth-child(3) {
+  left: var(--payroll-fz-left3);
+  z-index: 6;
+  box-shadow: 4px 0 8px -4px rgba(15, 23, 42, 0.12), 0 4px 6px -2px rgba(15, 23, 42, 0.08);
+}
+
+#attendance .table-wrap table tbody td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: #fff;
+  background-clip: padding-box;
+  box-shadow: 1px 0 0 #f1f5f9;
+}
+#attendance .table-wrap table tbody td:nth-child(2) {
+  position: sticky;
+  left: var(--payroll-fz-left2);
+  z-index: 2;
+  background: #fff;
+  background-clip: padding-box;
+  box-shadow: 1px 0 0 #f1f5f9;
+}
+#attendance .table-wrap table tbody td:nth-child(3) {
+  position: sticky;
+  left: var(--payroll-fz-left3);
+  z-index: 2;
+  background: #fff;
+  background-clip: padding-box;
+  box-shadow: 4px 0 8px -4px rgba(15, 23, 42, 0.1);
+}
+
+.bank-advice-hint {
+  margin-bottom: 8px;
+}
+
+.bank-advice-period {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #0f172a;
+  margin-bottom: 12px;
+}
+
+.bank-advice-load-log-wrap {
+  margin-bottom: 16px;
+}
+
+.bank-advice-load-log-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 8px;
+}
+
+.bank-advice-load-log {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.bank-advice-load-log li {
+  padding: 8px 12px;
+  font-size: 0.88rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.bank-advice-load-log li:last-child {
+  border-bottom: none;
+}
+
+.bank-advice-load-log-empty:not([hidden]) {
+  margin: 0 0 8px;
+}
+
 .footer {
   text-align: center;
   padding: 20px;
   color: #6b7280;
+}
+
+.payroll-snapshot-region {
+  margin-top: 4px;
+}
+
+.payroll-snapshot-status:not([hidden]) {
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+}
+
+.payroll-snapshot-error {
+  color: #b91c1c;
+}
+
+.dashboard-accounting-pivot-wrap {
+  margin-bottom: 28px;
+}
+
+.dashboard-accounting-pivot-title {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 12px;
+  color: #0f172a;
+}
+
+.dashboard-accounting-pivot-scroll {
+  overflow-x: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+table.dashboard-accounting-pivot {
+  width: 100%;
+  min-width: 1100px;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.dashboard-accounting-pivot thead th {
+  background: #dbeafe;
+  color: #0f172a;
+  font-weight: 700;
+  text-align: center;
+  padding: 10px 8px;
+  border: 1px solid #bfdbfe;
+  white-space: nowrap;
+}
+
+.dashboard-accounting-pivot .accounting-pivot-corner {
+  text-align: left;
+  min-width: 120px;
+}
+
+.dashboard-accounting-pivot tbody th.accounting-pivot-row-label {
+  background: #f8fafc;
+  font-weight: 600;
+  text-align: left;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  white-space: nowrap;
+}
+
+.dashboard-accounting-pivot td.accounting-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.dashboard-accounting-pivot tr.accounting-pivot-grand-row th,
+.dashboard-accounting-pivot tr.accounting-pivot-grand-row td {
+  background: #dbeafe;
+  font-weight: 700;
+  border: 1px solid #bfdbfe;
+}
+
+.dashboard-accounting-pivot td.accounting-grand-total {
+  background: #dbeafe !important;
+}
+
+.dashboard-accounting-pivot .accounting-pivot-empty {
+  text-align: center;
+  padding: 20px;
 }
 
 @media (max-width: 720px) {

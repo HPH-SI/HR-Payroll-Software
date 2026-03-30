@@ -463,6 +463,7 @@ public class EmployeeRecord
 {
     public string EmployeeId { get; set; } = "";
     public string Names { get; set; } = "";
+    public string CostCenter { get; set; } = "";
     public string StartDate { get; set; } = "";
     public string Shift { get; set; } = "";
     public string Status { get; set; } = "";
@@ -497,6 +498,7 @@ public static class AccessDbReader
                     {
                         EmployeeId = GetString(columns, reader, ColumnHints.UserId),
                         Names = GetString(columns, reader, ColumnHints.Name),
+                        CostCenter = GetString(columns, reader, ColumnHints.CostCenter),
                         StartDate = GetDateString(columns, reader, ColumnHints.StartDate),
                         Shift = GetString(columns, reader, ColumnHints.Shift),
                         Status = GetString(columns, reader, ColumnHints.Status)
@@ -902,6 +904,7 @@ public static class ColumnHints
     public static readonly string[] StartDate = { "start", "joindate", "hire" };
     public static readonly string[] Shift = { "shift" };
     public static readonly string[] Status = { "status", "active", "enabled" };
+    public static readonly string[] CostCenter = { "costcenter", "cost center", "department", "dept", "section" };
 
     public static readonly string[] CheckTime = { "checktime", "datetime", "logtime" };
     public static readonly string[] Date = { "date" };

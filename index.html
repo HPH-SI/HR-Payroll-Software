@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   </head>
   <body>
     <header class="top-bar">
@@ -24,6 +25,7 @@
         <a href="#biometric" data-section="biometric">Biometric Device Setup</a>
         <a href="#attendance-sheet" data-section="attendance-sheet">Attendance</a>
         <a href="#attendance" data-section="attendance">Payroll</a>
+        <a href="#bank-advice" data-section="bank-advice">Bank Advice</a>
       </div>
     </nav>
 
@@ -54,31 +56,42 @@
             </ul>
           </div>
           <div class="panel">
-            <h3>Payroll Snapshot</h3>
-            <p>Total expected payout: <strong id="statTotalPayout">SB$ 0.00</strong></p>
-            <p>Average basic wage per hour: <strong id="statAverageWage">SB$ 0.00</strong></p>
+            <h3 id="payrollSnapshotHeading">Payroll Snapshot</h3>
+            <p class="muted" style="font-size:0.9rem;margin-bottom:8px">Uses the <strong>Report period</strong> below (same calculation as Payroll / charts).</p>
+            <div id="payrollSnapshotRegion" class="payroll-snapshot-region" role="region" aria-labelledby="payrollSnapshotHeading" aria-live="polite" aria-atomic="true" aria-busy="false">
+              <p id="payrollSnapshotStatus" class="payroll-snapshot-status muted" hidden></p>
+              <p>Total salary for period: <strong id="statTotalPayout">SB$ 0.00</strong></p>
+              <p>Average salary for period (per employee): <strong id="statAverageWage">SB$ 0.00</strong></p>
+            </div>
           </div>
         </div>
         <div class="dashboard-charts">
-          <label class="dashboard-chart-period">
-            Report period
-            <select id="dashboardChartPeriod"></select>
-          </label>
+          <div class="dashboard-chart-period-row">
+            <label class="dashboard-chart-period">
+              Report period
+              <select id="dashboardChartPeriod"></select>
+            </label>
+            <button type="button" id="dashboardDownloadExcel" class="primary">Download Excel</button>
+          </div>
+          <div class="dashboard-accounting-pivot-wrap">
+            <h3 class="dashboard-accounting-pivot-title">PIVOT FOR ACCOUNTING</h3>
+            <div class="dashboard-accounting-pivot-scroll">
+              <table class="dashboard-accounting-pivot" id="dashboardAccountingPivotTable">
+                <thead id="dashboardAccountingPivotHead"></thead>
+                <tbody id="dashboardAccountingPivotBody"></tbody>
+              </table>
+            </div>
+          </div>
           <div class="charts-grid">
             <div class="chart-container"><h3>Taxable Earning (A) by Cost Center</h3><canvas id="chartTaxableEarning"></canvas></div>
-            <div class="chart-container"><h3>Arrears by Cost Center</h3><canvas id="chartArrears"></canvas></div>
-            <div class="chart-container"><h3>Compass/Officiate by Cost Center</h3><canvas id="chartCompass"></canvas></div>
-            <div class="chart-container"><h3>MET Leave by Cost Center</h3><canvas id="chartMetLeave"></canvas></div>
             <div class="chart-container"><h3>Annual Leave by Cost Center</h3><canvas id="chartAnnualLeave"></canvas></div>
             <div class="chart-container"><h3>Total Earning by Cost Center</h3><canvas id="chartTotalEarning"></canvas></div>
             <div class="chart-container"><h3>NPF 5% by Cost Center</h3><canvas id="chartNpf5"></canvas></div>
             <div class="chart-container"><h3>NPF 7.5% by Cost Center</h3><canvas id="chartNpf75"></canvas></div>
-            <div class="chart-container"><h3>Voluntary NPF by Cost Center</h3><canvas id="chartVoluntaryNpf"></canvas></div>
             <div class="chart-container"><h3>Pay E (A) by Cost Center</h3><canvas id="chartPayeA"></canvas></div>
             <div class="chart-container"><h3>Basic 1% by Cost Center</h3><canvas id="chartBasic1"></canvas></div>
-            <div class="chart-container"><h3>Other Dedu by Cost Center</h3><canvas id="chartOtherDedu"></canvas></div>
+            <div class="chart-container"><h3>Other deductions by Cost Center</h3><canvas id="chartOtherDedu"></canvas></div>
             <div class="chart-container"><h3>Salary for Period by Cost Center</h3><canvas id="chartSalaryForPeriod"></canvas></div>
-            <div class="chart-container"><h3>Salary for Period RO by Cost Center</h3><canvas id="chartAmountRO"></canvas></div>
           </div>
         </div>
       </section>
@@ -220,8 +233,9 @@
         <div class="button-row">
           <button id="syncAttendanceSheet" type="button">Sync Employees & Attendance</button>
           <button id="loadAttendanceSheet" type="button">Load Attendance</button>
+          <button id="downloadAttendanceByCostCenter" type="button">Download Excel by Cost Center</button>
         </div>
-        <p id="attendanceSheetMessage" class="hint">Manual entries are saved automatically to browser and server. Data persists across refreshes and app updates.</p>
+        <p id="attendanceSheetMessage" class="hint">Manual entries are saved automatically to browser and server (per fortnight). Device sync merges attendance from the <strong>current fortnight</strong> onward and does not remove older stored logs.</p>
         <div class="table-wrap attendance-sheet-wrap">
           <table class="attendance-sheet-table">
             <thead>
@@ -245,32 +259,16 @@
             <select id="attendanceFortnight"></select>
           </label>
         </div>
-        <div class="payroll-filters-row">
-          <label>Cost Center <select id="payrollCostCenter"><option value="">All</option></select></label>
-          <label>Taxable Earning (A) <select id="filterTaxable"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Arrears <select id="filterArrears"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Compass/Officiate <select id="filterCompass"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>MET Leave <select id="filterMetLeave"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Annual Leave <select id="filterAnnualLeave"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Total Earning <select id="filterTotalEarning"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>NPF 5% <select id="filterNpf5"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>NPF 7.5% <select id="filterNpf75"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Voluntary NPF <select id="filterVoluntaryNpf"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Pay E (A) <select id="filterPaye"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Basic 1% <select id="filterBasic1"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Other Dedu <select id="filterOtherDedu"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-          <label>Salary for Period RO <select id="filterSalaryForRo"><option value="">All</option><option value="nonzero">Has value</option><option value="zero">Zero</option></select></label>
-        </div>
         <div class="button-row">
           <button id="loadAttendanceLogs" type="button">Load Logs</button>
           <button id="downloadAllLogsExcel" type="button">Download All Excel</button>
+          <button id="downloadAllPayslipsPdf" type="button">Download All Payslips PDF</button>
         </div>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>Employee Id</th>
-                <th>Download</th>
                 <th>Employee Name</th>
                 <th>Cost Center</th>
                 <th>NPF Number</th>
@@ -281,30 +279,67 @@
                 <th>OT Salary</th>
                 <th>PH x 2</th>
                 <th>Housing Allowance</th>
+                <th title="Manual amount; included in taxable earning">Rent Allowance</th>
                 <th>Taxable Earning (A)</th>
                 <th>Arrears</th>
-                <th>Compass/Officiate</th>
                 <th>MET Leave</th>
                 <th>Annual Leave</th>
                 <th>Total Earning</th>
                 <th>NPF 5%</th>
                 <th>NPF 7.5%</th>
-                <th>Voluntary NPF</th>
+                <th title="Enter percentage of total earning (e.g. 5 = 5%)">Voluntary NPF %</th>
                 <th>Pay E (A)</th>
                 <th>Basic 1%</th>
-                <th>Other Dedu</th>
+                <th title="Other deductions — enter manually; saved per fortnight with attendance data">Other Dedu</th>
                 <th>Salary for Period</th>
-                <th>Salary for Period RO</th>
               </tr>
             </thead>
             <tbody id="attendanceTable">
             </tbody>
+            <tfoot id="attendanceTableFoot" class="payroll-table-tfoot" hidden></tfoot>
           </table>
         </div>
         <div class="button-row">
           <button id="attendancePrev" type="button">Previous</button>
           <span id="attendancePageInfo" class="hint">Page 1</span>
           <button id="attendanceNext" type="button">Next</button>
+        </div>
+      </section>
+
+      <section id="bank-advice" class="card">
+        <h2>Bank Advice</h2>
+        <p class="muted bank-advice-hint">
+          Choose a fortnight and <strong>Load Logs</strong> (same payroll data as the Payroll tab after load).
+        </p>
+        <div class="grid two">
+          <label>
+            Fortnight Period (2026)
+            <select id="bankAdviceFortnight"></select>
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="bankAdviceLoadLogs" type="button">Load Logs</button>
+          <button id="bankAdviceDownloadExcel" type="button">Download Excel</button>
+        </div>
+        <p id="bankAdvicePeriod" class="bank-advice-period"></p>
+        <div class="bank-advice-load-log-wrap">
+          <h3 class="bank-advice-load-log-title">Load history</h3>
+          <ul id="bankAdviceLoadLog" class="bank-advice-load-log" aria-live="polite"></ul>
+          <p id="bankAdviceLoadLogEmpty" class="muted bank-advice-load-log-empty">No loads from this page yet.</p>
+        </div>
+        <div class="table-wrap">
+          <table class="bank-advice-table">
+            <thead>
+              <tr>
+                <th>Employee Id</th>
+                <th>Employee Name</th>
+                <th>BSP Account</th>
+                <th>Salary for Period</th>
+              </tr>
+            </thead>
+            <tbody id="bankAdviceTable">
+            </tbody>
+          </table>
         </div>
       </section>
 

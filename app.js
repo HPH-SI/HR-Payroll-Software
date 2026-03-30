@@ -94,9 +94,6 @@ const payrollOtherDeductionsInput = document.getElementById(
 const payrollSalaryPeriodInput = document.getElementById(
   "payrollSalaryPeriodInput"
 );
-const payrollSalaryPeriodRoInput = document.getElementById(
-  "payrollSalaryPeriodRoInput"
-);
 const payrollDownloadSelectedExcel = document.getElementById(
   "payrollDownloadSelectedExcel"
 );
@@ -120,6 +117,7 @@ const payslipOtHours = document.getElementById("payslipOtHours");
 const payslipOtPay = document.getElementById("payslipOtPay");
 const payslipPhPay = document.getElementById("payslipPhPay");
 const payslipHousingAllowance = document.getElementById("payslipHousingAllowance");
+const payslipRentAllowance = document.getElementById("payslipRentAllowance");
 const payslipMetLeave = document.getElementById("payslipMetLeave");
 const payslipHhs = document.getElementById("payslipHhs");
 const payslipConveyance = document.getElementById("payslipConveyance");
@@ -135,12 +133,21 @@ const payslipPayeA = document.getElementById("payslipPayeA");
 const payslipBasicRate1 = document.getElementById("payslipBasicRate1");
 const payslipOtherDeductions = document.getElementById("payslipOtherDeductions");
 const payslipSalaryPeriod = document.getElementById("payslipSalaryPeriod");
-const payslipSalaryPeriodRo = document.getElementById("payslipSalaryPeriodRo");
 const payslipDownloadExcel = document.getElementById("payslipDownloadExcel");
 const payslipDownloadPdf = document.getElementById("payslipDownloadPdf");
 const attendanceTable = document.getElementById("attendanceTable");
+const attendanceTableFoot = document.getElementById("attendanceTableFoot");
+const bankAdviceFortnight = document.getElementById("bankAdviceFortnight");
+const bankAdviceLoadLogs = document.getElementById("bankAdviceLoadLogs");
+const bankAdvicePeriod = document.getElementById("bankAdvicePeriod");
+const bankAdviceTable = document.getElementById("bankAdviceTable");
+const bankAdviceDownloadExcel = document.getElementById("bankAdviceDownloadExcel");
+const bankAdviceLoadLog = document.getElementById("bankAdviceLoadLog");
+const bankAdviceLoadLogEmpty = document.getElementById("bankAdviceLoadLogEmpty");
+const bankAdviceSection = document.getElementById("bank-advice");
 const loadAttendanceLogs = document.getElementById("loadAttendanceLogs");
 const downloadAllLogsExcel = document.getElementById("downloadAllLogsExcel");
+const downloadAllPayslipsPdf = document.getElementById("downloadAllPayslipsPdf");
 const attendanceSearch = document.getElementById("attendanceSearch");
 const attendancePrev = document.getElementById("attendancePrev");
 const attendanceNext = document.getElementById("attendanceNext");
@@ -160,16 +167,22 @@ const statEmployees = document.getElementById("statEmployees");
 const nextPayrollDate = document.getElementById("nextPayrollDate");
 const statTotalPayout = document.getElementById("statTotalPayout");
 const statAverageWage = document.getElementById("statAverageWage");
+const payrollSnapshotRegion = document.getElementById("payrollSnapshotRegion");
+const payrollSnapshotStatus = document.getElementById("payrollSnapshotStatus");
+const dashboardAccountingPivotTable = document.getElementById("dashboardAccountingPivotTable");
+const dashboardAccountingPivotHead = document.getElementById("dashboardAccountingPivotHead");
+const dashboardAccountingPivotBody = document.getElementById("dashboardAccountingPivotBody");
 const contentSections = document.querySelectorAll("main.content > section");
 const attendanceSheetFortnight = document.getElementById("attendanceSheetFortnight");
 const attendanceSheetCostCenter = document.getElementById("attendanceSheetCostCenter");
-const payrollCostCenter = document.getElementById("payrollCostCenter");
 const loadAttendanceSheet = document.getElementById("loadAttendanceSheet");
 const syncAttendanceSheet = document.getElementById("syncAttendanceSheet");
+const downloadAttendanceByCostCenter = document.getElementById("downloadAttendanceByCostCenter");
 const attendanceSheetMessage = document.getElementById("attendanceSheetMessage");
 const attendanceSheetHeaderRow = document.getElementById("attendanceSheetHeaderRow");
 const attendanceSheetTable = document.getElementById("attendanceSheetTable");
 const dashboardChartPeriod = document.getElementById("dashboardChartPeriod");
+const dashboardDownloadExcel = document.getElementById("dashboardDownloadExcel");
 
 if (employeeNPFInput) employeeNPFInput.readOnly = true;
 if (employeeBSPInput) employeeBSPInput.readOnly = true;
@@ -193,65 +206,197 @@ let attendanceSummaryRows = [];
 let rosterFilterEmployeeId = "";
 let attendanceSearchTerm = "";
 
+const BANK_ADVICE_LOAD_LOG_MAX = 100;
+let bankAdviceLoadLogEntries = [];
+
 const API_BASE = "http://localhost:4000";
-const MAX_DAILY_HOURS = 7.5;
-const MAX_FORTNIGHT_HOURS = 90;
+const MAX_DAILY_HOURS = 24;
+const MAX_FORTNIGHT_HOURS = 999;
+
+/** Per sick day, subtract this from formula HHS (H K, HK, POMEC only). */
+const HHS_SICK_DAY_DEDUCTION = 7.5;
+
+/**
+ * Formula HHS when auto-calculated: (baseHours × 0.5) − (sickDays × {@link HHS_SICK_DAY_DEDUCTION}), floored at 0.
+ * Attendance sheet uses Normal hours as baseHours; log-based preview uses total hours.
+ */
+const calculateFormulaHhs = (baseHours, sickDaysRaw, hhsEligible) => {
+  if (!hhsEligible) return 0;
+  const base = Number(baseHours) || 0;
+  const sick = Number(sickDaysRaw) || 0;
+  return Math.max(0, base * 0.5 - sick * HHS_SICK_DAY_DEDUCTION);
+};
+
+/**
+ * Annual leave pay for payroll: 7.5h × (basic wage/hr + housing all/hr) × attendance Annual Leave (units, typically days).
+ */
+const ANNUAL_LEAVE_HOURS_PER_UNIT = 7.5;
+const annualLeavePayFromAttendance = (basicWage, housingRate, annualLeaveUnits) => {
+  const bw = Number(basicWage) || 0;
+  const hr = Number(housingRate) || 0;
+  const u = Number(annualLeaveUnits) || 0;
+  return ANNUAL_LEAVE_HOURS_PER_UNIT * (bw + hr) * u;
+};
+
+/** Per-day conveyance tier: 0 = none, 1 = $7.50, 2 = $15 (only counts when hours > 0 that day). */
+const CONVEYANCE_TIER_AMOUNTS = { 0: 0, 1: 7.5, 2: 15 };
+const clampConveyanceTier = (v) => {
+  const n = Number(v);
+  if (n === 1 || n === 2) return n;
+  return 0;
+};
+const conveyanceDollarsForTier = (tier) => CONVEYANCE_TIER_AMOUNTS[clampConveyanceTier(tier)] ?? 0;
+const computeConveyanceFromDayTiersAndHours = (dayValues, tiers) => {
+  const len = Math.min(dayValues?.length || 0, tiers?.length || 0);
+  let sum = 0;
+  for (let i = 0; i < len; i++) {
+    const h = parseFloat(String(dayValues[i] ?? "").replace(/,/g, "")) || 0;
+    if (h <= 0) continue;
+    sum += conveyanceDollarsForTier(tiers[i]);
+  }
+  return sum;
+};
+
+/** Voluntary NPF: user enters a percentage (e.g. 5 = 5% of total earning). */
+const voluntaryNpfAmountFromPercent = (totalEarning, percentRaw) => {
+  const te = Number(totalEarning) || 0;
+  const pct = Number(percentRaw) || 0;
+  return (te * pct) / 100;
+};
+
+/**
+ * Net salary: Total Earning − NPF 5% − Voluntary NPF − PAYE − Basic 1% − Other.
+ * NPF 7.5% is not deducted from take-home pay (shown separately for reporting / employer levy).
+ * NPF 5% is 5% of Total Earning; Basic 1% is 1% of basic salary.
+ */
+const computeSalaryForPeriod = ({
+  totalEa,
+  basicSalary,
+  voluntaryNpfPct,
+  payeA,
+  otherDeductions,
+}) => {
+  const te = Number(totalEa) || 0;
+  const bs = Number(basicSalary) || 0;
+  const npf5 = te * 0.05;
+  const voluntaryNpfAmount = voluntaryNpfAmountFromPercent(te, voluntaryNpfPct);
+  const basic1 = bs * 0.01;
+  const paye = Number(payeA) || 0;
+  const other = Number(otherDeductions) || 0;
+  return te - npf5 - voluntaryNpfAmount - paye - basic1 - other;
+};
+
+const getVoluntaryNpfPctForDisplay = (log) => {
+  if (log == null) return 0;
+  if (log.voluntaryNpfPct != null && log.voluntaryNpfPct !== "") {
+    const p = Number(log.voluntaryNpfPct);
+    return Number.isFinite(p) ? p : 0;
+  }
+  const te = parseFloat(log.totalEa) || 0;
+  const vn = parseFloat(log.voluntaryN) || 0;
+  if (te > 0 && vn >= 0) return (vn / te) * 100;
+  return 0;
+};
 
 const updateDashboardStats = (employees) => {
   if (!employees || employees.length === 0) {
     if (statEmployees) statEmployees.textContent = "0";
-    if (statAverageWage) statAverageWage.textContent = "SB$ 0.00";
-    if (statTotalPayout) statTotalPayout.textContent = "SB$ 0.00";
     return;
   }
   const activeEmployees = employees.filter(
     (emp) => (emp.status || "Active") === "Active"
   );
   if (statEmployees) statEmployees.textContent = `${activeEmployees.length}`;
+};
 
-  const wages = employees
-    .map((emp) => Number(emp.basicWage || 0))
-    .filter((value) => Number.isFinite(value) && value > 0);
-  const averageWage =
-    wages.length > 0
-      ? wages.reduce((sum, value) => sum + value, 0) / wages.length
-      : 0;
-  if (statAverageWage) {
-    statAverageWage.textContent = `SB$ ${averageWage.toFixed(2)}`;
+const clearDashboardSnapshotStatusLine = () => {
+  if (payrollSnapshotStatus) {
+    payrollSnapshotStatus.textContent = "";
+    payrollSnapshotStatus.hidden = true;
+    payrollSnapshotStatus.classList.remove("payroll-snapshot-error");
   }
+};
 
-  const standardHours = 8.5;
-  const estimatedDays = 10;
-  const totalPayout =
-    wages.length > 0
-      ? wages.reduce((sum, value) => sum + value, 0) *
-        standardHours *
-        estimatedDays
-      : 0;
-  if (statTotalPayout) {
-    statTotalPayout.textContent = `SB$ ${totalPayout.toFixed(2)}`;
+const zeroDashboardPayrollSnapshotTotals = () => {
+  if (statTotalPayout) statTotalPayout.textContent = "SB$ 0.00";
+  if (statAverageWage) statAverageWage.textContent = "SB$ 0.00";
+};
+
+const setDashboardSnapshotLoading = (loading) => {
+  if (dashboardChartPeriod) dashboardChartPeriod.disabled = loading;
+  if (payrollSnapshotRegion) payrollSnapshotRegion.setAttribute("aria-busy", loading ? "true" : "false");
+  if (loading) {
+    if (statTotalPayout) statTotalPayout.textContent = "—";
+    if (statAverageWage) statAverageWage.textContent = "—";
+    if (payrollSnapshotStatus) {
+      payrollSnapshotStatus.textContent = "Calculating…";
+      payrollSnapshotStatus.hidden = false;
+      payrollSnapshotStatus.classList.remove("payroll-snapshot-error");
+    }
   }
+};
+
+const setDashboardSnapshotError = (message) => {
+  if (!payrollSnapshotStatus) return;
+  if (message) {
+    payrollSnapshotStatus.textContent = message;
+    payrollSnapshotStatus.hidden = false;
+    payrollSnapshotStatus.classList.add("payroll-snapshot-error");
+  } else {
+    clearDashboardSnapshotStatusLine();
+  }
+};
+
+/** Payroll Snapshot figures for the selected dashboard fortnight (same as charts / Payroll pipeline). */
+const updateDashboardPayrollSnapshotFromPivot = (result) => {
+  clearDashboardSnapshotStatusLine();
+  if (!result) {
+    if (statTotalPayout) statTotalPayout.textContent = "SB$ 0.00";
+    if (statAverageWage) statAverageWage.textContent = "SB$ 0.00";
+    return;
+  }
+  const total = result.grandTotal?.salaryForPeriod ?? 0;
+  const n = result.rowCount || 0;
+  const avg = n > 0 ? total / n : 0;
+  if (statTotalPayout) statTotalPayout.textContent = `SB$ ${Number(total).toFixed(2)}`;
+  if (statAverageWage) statAverageWage.textContent = `SB$ ${Number(avg).toFixed(2)}`;
+};
+
+/** Jan 5 anchor for the 26-fortnight schedule that contains today (rolls forward each year). */
+const getFortnightAnchorStart = () => {
+  const today = new Date();
+  today.setHours(12, 0, 0, 0);
+  let y = today.getFullYear();
+  let start = new Date(y, 0, 5);
+  if (today < start) y -= 1;
+  start = new Date(y, 0, 5);
+  const endOfSchedule = new Date(start);
+  endOfSchedule.setDate(start.getDate() + 26 * 14 - 1);
+  if (today > endOfSchedule) {
+    y += 1;
+    start = new Date(y, 0, 5);
+  }
+  return start;
 };
 
 const updateNextPayrollDate = () => {
   if (!nextPayrollDate) return;
-  const today = new Date();
-  const year = 2026;
-  const start = new Date(year, 0, 5);
-  let payrollDate = null;
-  for (let i = 0; i < 26; i += 1) {
-    const periodStart = new Date(start);
-    periodStart.setDate(start.getDate() + i * 14);
-    const periodEnd = new Date(periodStart);
-    periodEnd.setDate(periodStart.getDate() + 13);
-    if (today >= periodStart && today <= periodEnd) {
-      payrollDate = new Date(periodEnd);
-      payrollDate.setDate(periodEnd.getDate() + 1);
-      break;
-    }
+  const periods = getFortnightPeriods();
+  const current = periods.find((p) => p.isCurrent);
+  if (current) {
+    const periodEnd = new Date(`${current.endIso}T12:00:00`);
+    const payDate = new Date(periodEnd);
+    payDate.setDate(payDate.getDate() + 1);
+    nextPayrollDate.textContent = payDate.toLocaleDateString("en-GB", {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    });
+    return;
   }
-  const display = payrollDate || new Date(today.getTime() + 24 * 60 * 60 * 1000);
-  nextPayrollDate.textContent = display.toLocaleDateString("en-GB", {
+  const today = new Date();
+  const fallback = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+  nextPayrollDate.textContent = fallback.toLocaleDateString("en-GB", {
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -273,13 +418,16 @@ const toLocalIsoDate = (d) => {
 
 const getFortnightPeriods = () => {
   const periods = [];
-  const start = new Date(2026, 0, 5);
+  const start = getFortnightAnchorStart();
   const today = new Date();
+  today.setHours(12, 0, 0, 0);
   for (let i = 0; i < 26; i += 1) {
     const periodStart = new Date(start);
     periodStart.setDate(start.getDate() + i * 14);
+    periodStart.setHours(12, 0, 0, 0);
     const periodEnd = new Date(periodStart);
     periodEnd.setDate(periodStart.getDate() + 13);
+    periodEnd.setHours(12, 0, 0, 0);
     const startIso = toLocalIsoDate(periodStart);
     const endIso = toLocalIsoDate(periodEnd);
     const value = `${startIso}_${endIso}`;
@@ -351,7 +499,10 @@ const syncAttendanceFortnightSelection = () => {
 };
 
 const populateAttendanceFortnights = () => {
-  if (!attendanceFortnight) return;
+  if (!attendanceFortnight) {
+    populateBankAdviceFortnights("");
+    return;
+  }
   attendanceFortnight.innerHTML = "";
 
   const defaultOption = document.createElement("option");
@@ -377,6 +528,37 @@ const populateAttendanceFortnights = () => {
     attendanceFilterTo = endIso;
     if (attendanceFrom) attendanceFrom.value = startIso;
     if (attendanceTo) attendanceTo.value = endIso;
+  }
+  populateBankAdviceFortnights(attendanceFortnight.value || "");
+};
+
+const populateBankAdviceFortnights = (matchValue) => {
+  if (!bankAdviceFortnight) return;
+  bankAdviceFortnight.innerHTML = "";
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = "Select fortnight period";
+  bankAdviceFortnight.appendChild(defaultOption);
+  getFortnightPeriods().forEach((period) => {
+    const option = document.createElement("option");
+    option.value = period.value;
+    option.textContent = period.label;
+    bankAdviceFortnight.appendChild(option);
+  });
+  const v =
+    matchValue && Array.from(bankAdviceFortnight.options).some((o) => o.value === matchValue)
+      ? matchValue
+      : "";
+  bankAdviceFortnight.value = v;
+};
+
+const syncBankAdviceFortnightFromAttendance = () => {
+  if (!bankAdviceFortnight || !attendanceFortnight) return;
+  const v = attendanceFortnight.value;
+  if (v && Array.from(bankAdviceFortnight.options).some((o) => o.value === v)) {
+    bankAdviceFortnight.value = v;
+  } else if (!v) {
+    bankAdviceFortnight.value = "";
   }
 };
 
@@ -423,128 +605,154 @@ const populateAttendanceSheetFortnights = () => {
   if (selectedValue) attendanceSheetFortnight.value = selectedValue;
 };
 
-const getReportPivotData = async (range) => {
-  if (!range?.start || !range?.end) return null;
-  const allLogs = await loadAllAttendanceLogsForPeriod(range);
-  const logsByEmployee = new Map();
-  allLogs.forEach((log) => {
-    if (!log?.employeeId) return;
-    const key = String(log.employeeId);
-    if (!logsByEmployee.has(key)) logsByEmployee.set(key, []);
-    logsByEmployee.get(key).push(log);
+const payrollPivotNum = (v) => {
+  const x = parseFloat(String(v ?? "").replace(/,/g, ""));
+  return Number.isFinite(x) ? x : 0;
+};
+
+/** One object shape for accounting pivot rows / grand total (every column from the same payroll log). */
+const createEmptyPivotAccountingAccumulator = () => ({
+  taxableEarning: 0,
+  arrears: 0,
+  compass: 0,
+  metLeave: 0,
+  annualLeave: 0,
+  totalEarning: 0,
+  npfEE: 0,
+  npfER: 0,
+  voluntaryNpf: 0,
+  payeA: 0,
+  payeSplitA: 0,
+  payeSplitAL: 0,
+  basicRate: 0,
+  otherDeductions: 0,
+  salaryForPeriod: 0,
+});
+
+const PIVOT_ACCOUNTING_KEYS = Object.keys(createEmptyPivotAccountingAccumulator());
+
+/** Maps one payroll row (from buildPayrollRowsForFortnight) into pivot totals — single mapping for all columns. */
+const addPayrollLogToPivotAccountingAccumulator = (acc, log) => {
+  acc.taxableEarning += payrollPivotNum(log.taxableE);
+  acc.arrears += payrollPivotNum(log.arrears);
+  acc.compass += payrollPivotNum(log.compassOf);
+  acc.metLeave += payrollPivotNum(log.metLeave);
+  acc.annualLeave += payrollPivotNum(log.annual);
+  acc.totalEarning += payrollPivotNum(log.totalEa);
+  acc.npfEE += payrollPivotNum(log.npf5);
+  acc.npfER += payrollPivotNum(log.npf75);
+  acc.voluntaryNpf += payrollPivotNum(log.voluntaryN);
+  acc.payeA += payrollPivotNum(log.payeA);
+  acc.payeSplitA += payrollPivotNum(log.payeSplitA);
+  acc.payeSplitAL += payrollPivotNum(log.payeSplitAL);
+  acc.basicRate += payrollPivotNum(log.basic1);
+  acc.otherDeductions += payrollPivotNum(log.otherDedu);
+  acc.salaryForPeriod += payrollPivotNum(log.salaryFor);
+};
+
+const reportPivotCache = new Map();
+const reportPivotPending = new Map();
+
+const invalidateReportPivotCache = () => {
+  reportPivotCache.clear();
+};
+
+/**
+ * When the Attendance sheet is loaded for the same fortnight as the dashboard report,
+ * return fresh DOM-derived entries (same as Load Logs / payroll preview). Otherwise null.
+ */
+function getPayrollDomEntriesForFortnight(fortnightValue) {
+  const useAttendanceSheet =
+    fortnightValue &&
+    fortnightValue.includes("_") &&
+    attendanceSheetFortnightValue === fortnightValue &&
+    attendanceSheetEntries.length > 0;
+  if (!useAttendanceSheet || !attendanceSheetTable) return null;
+  const freshEntries = [];
+  attendanceSheetTable.querySelectorAll("tr[data-employee-id]").forEach((row) => {
+    const entry = buildAttendanceEntryFromRow(row);
+    if (entry.employeeId) freshEntries.push(entry);
   });
+  if (freshEntries.length > 0) return freshEntries;
+  return attendanceSheetEntries.length ? attendanceSheetEntries : null;
+}
 
-  const pivotByCostCenter = new Map();
+/** Aggregates payroll rows from buildPayrollRowsForFortnight (same as Payroll tab). */
+const getReportPivotData = async (fortnightValue) => {
+  if (!fortnightValue || !fortnightValue.includes("_")) {
+    return { ok: true, result: null };
+  }
+  const domEntries = getPayrollDomEntriesForFortnight(fortnightValue);
+  const cacheKey = `${fortnightValue}|${domEntries ? "dom" : "nodom"}`;
+  const cached = reportPivotCache.get(cacheKey);
+  if (cached) return cached;
+  const inflight = reportPivotPending.get(cacheKey);
+  if (inflight) return inflight;
 
-  employeesCache.forEach((employee) => {
-    const employeeId = String(employee.employeeId || "");
-    const costCenter = (employee.costCenter || employee.department || "").trim() || "(blank)";
-    const logs = logsByEmployee.get(employeeId) || [];
-    const arrears = Number(employee.arrears || 0);
-    const compass = Number(employee.compass || 0);
-    const voluntaryNpf = Number(employee.voluntaryNpf || 0);
-    const otherDeductions = Number(employee.otherDeductions || 0);
-    const metrics = buildPayrollMetrics(employee, logs, {
-      publicHoliday: false,
-      housingRate: employee.hAllow,
-      arrears,
-      compass,
-      voluntaryNpf,
-      otherDeductions,
-    });
+  const promise = (async () => {
+    try {
+      const payrollRows = await buildPayrollRowsForFortnight(fortnightValue, domEntries);
+      if (!payrollRows || payrollRows.length === 0) {
+        const out = { ok: true, result: null };
+        reportPivotCache.set(cacheKey, out);
+        return out;
+      }
 
-    const payeAL = metrics.taxableEarning > 0 && metrics.annualLeaveAmount > 0
-      ? (metrics.annualLeaveAmount / (metrics.taxableEarning + metrics.annualLeaveAmount)) * (metrics.payeA || 0)
-      : 0;
+      const pivotByCostCenter = new Map();
 
-    if (!pivotByCostCenter.has(costCenter)) {
-      pivotByCostCenter.set(costCenter, {
-        taxableEarning: 0,
-        arrears: 0,
-        compass: 0,
-        metLeave: 0,
-        annualLeave: 0,
-        totalEarning: 0,
-        npfEE: 0,
-        npfER: 0,
-        voluntaryNpf: 0,
-        payeA: 0,
-        basicRate: 0,
-        otherDeductions: 0,
-        salaryForPeriod: 0,
-        amountRO: 0,
+      payrollRows.forEach((log) => {
+        const costCenter = (log.costCenter || "").trim() || "(blank)";
+        if (!pivotByCostCenter.has(costCenter)) {
+          pivotByCostCenter.set(costCenter, createEmptyPivotAccountingAccumulator());
+        }
+        addPayrollLogToPivotAccountingAccumulator(pivotByCostCenter.get(costCenter), log);
       });
+
+      const sortedCenters = [...pivotByCostCenter.keys()].sort((a, b) => {
+        if (a === "(blank)") return 1;
+        if (b === "(blank)") return -1;
+        return a.localeCompare(b);
+      });
+
+      const grandTotal = createEmptyPivotAccountingAccumulator();
+      sortedCenters.forEach((label) => {
+        const data = pivotByCostCenter.get(label);
+        PIVOT_ACCOUNTING_KEYS.forEach((k) => {
+          grandTotal[k] += data[k];
+        });
+      });
+
+      const out = {
+        ok: true,
+        result: { pivotByCostCenter, sortedCenters, grandTotal, rowCount: payrollRows.length },
+      };
+      reportPivotCache.set(cacheKey, out);
+      return out;
+    } catch (error) {
+      return {
+        ok: false,
+        result: null,
+        error:
+          "Could not load payroll data. Check that the server is running and try again.",
+      };
+    } finally {
+      reportPivotPending.delete(cacheKey);
     }
-    const row = pivotByCostCenter.get(costCenter);
-    row.taxableEarning += metrics.taxableEarning || 0;
-    row.arrears += metrics.arrears || 0;
-    row.compass += metrics.compass || 0;
-    row.metLeave += metrics.metLeave || 0;
-    row.annualLeave += metrics.annualLeaveAmount || 0;
-    row.totalEarning += metrics.totalEarning || 0;
-    row.npfEE += metrics.npf5 || 0;
-    row.npfER += metrics.npf75 || 0;
-    row.voluntaryNpf += metrics.voluntaryNpf || 0;
-    row.payeA += metrics.payeA || 0;
-    row.basicRate += metrics.basicRate1 || 0;
-    row.otherDeductions += metrics.otherDeductions || 0;
-    row.salaryForPeriod += metrics.salaryForPeriod || 0;
-    row.amountRO += Math.round(metrics.salaryForPeriod || 0);
-  });
+  })();
 
-  const sortedCenters = [...pivotByCostCenter.keys()].sort((a, b) => {
-    if (a === "(blank)") return 1;
-    if (b === "(blank)") return -1;
-    return a.localeCompare(b);
-  });
-
-  let grandTotal = {
-    taxableEarning: 0,
-    arrears: 0,
-    compass: 0,
-    metLeave: 0,
-    annualLeave: 0,
-    totalEarning: 0,
-    npfEE: 0,
-    npfER: 0,
-    voluntaryNpf: 0,
-    payeA: 0,
-    basicRate: 0,
-    otherDeductions: 0,
-    salaryForPeriod: 0,
-    amountRO: 0,
-  };
-  sortedCenters.forEach((label) => {
-    const data = pivotByCostCenter.get(label);
-    grandTotal.taxableEarning += data.taxableEarning;
-    grandTotal.arrears += data.arrears;
-    grandTotal.compass += data.compass;
-    grandTotal.metLeave += data.metLeave;
-    grandTotal.annualLeave += data.annualLeave;
-    grandTotal.totalEarning += data.totalEarning;
-    grandTotal.npfEE += data.npfEE;
-    grandTotal.npfER += data.npfER;
-    grandTotal.voluntaryNpf += data.voluntaryNpf;
-    grandTotal.payeA += data.payeA;
-    grandTotal.basicRate += data.basicRate;
-    grandTotal.otherDeductions += data.otherDeductions;
-    grandTotal.salaryForPeriod += data.salaryForPeriod;
-    grandTotal.amountRO += data.amountRO;
-  });
-
-  return { pivotByCostCenter, sortedCenters, grandTotal };
+  reportPivotPending.set(cacheKey, promise);
+  return promise;
 };
 
 let dashboardCharts = {};
 
-const getDashboardReportRange = () => {
-  const val = dashboardChartPeriod?.value || "";
-  if (!val || !val.includes("_")) return null;
-  const [startIso, endIso] = val.split("_");
-  return {
-    start: formatDateForStorage(startIso),
-    end: formatDateForStorage(endIso),
-  };
+const destroyAllDashboardCharts = () => {
+  Object.keys(dashboardCharts).forEach((key) => {
+    if (dashboardCharts[key]) {
+      dashboardCharts[key].destroy();
+      dashboardCharts[key] = null;
+    }
+  });
 };
 
 const populateDashboardChartPeriod = () => {
@@ -566,66 +774,231 @@ const CHART_COLORS = [
   "#ec4899", "#06b6d4", "#84cc16",
 ];
 
+/** Dashboard bar charts (canvas ids must match index.html). */
+const DASHBOARD_CHART_SPECS = [
+  { id: "chartTaxableEarning", key: "taxableEarning", title: "Taxable Earning (A)", field: "taxableEarning" },
+  { id: "chartAnnualLeave", key: "annualLeave", title: "Annual Leave", field: "annualLeave" },
+  { id: "chartTotalEarning", key: "totalEarning", title: "Total Earning", field: "totalEarning" },
+  { id: "chartNpf5", key: "npf5", title: "NPF 5%", field: "npfEE" },
+  { id: "chartNpf75", key: "npf75", title: "NPF 7.5%", field: "npfER" },
+  { id: "chartPayeA", key: "payeA", title: "Pay E (A)", field: "payeA" },
+  { id: "chartBasic1", key: "basic1", title: "Basic 1%", field: "basicRate" },
+  { id: "chartOtherDedu", key: "otherDedu", title: "Other deductions", field: "otherDeductions" },
+  {
+    id: "chartSalaryForPeriod",
+    key: "salaryForPeriod",
+    title: "Salary for Period",
+    field: "salaryForPeriod",
+  },
+];
+
+const DASHBOARD_BAR_CHART_OPTIONS = {
+  responsive: true,
+  maintainAspectRatio: true,
+  animation: false,
+  plugins: { legend: { display: false } },
+  scales: { y: { beginAtZero: true } },
+};
+
+let dashboardChartsRenderGeneration = 0;
+let dashboardChartPeriodDebounceTimer = null;
+
+/** Accounting pivot: same measures as Payroll tab columns (sums by cost center). */
+const DASHBOARD_ACCOUNTING_TABLE_COLUMNS = [
+  { key: "taxableEarning", label: "Sum of Taxable Earning (A)" },
+  { key: "annualLeave", label: "Sum of Annual Leave" },
+  { key: "totalEarning", label: "Sum of Total Earning" },
+  { key: "npfEE", label: "Sum of NPF 5%" },
+  { key: "npfER", label: "Sum of NPF 7.5%" },
+  { key: "payeA", label: "Sum of Pay E (A)" },
+  { key: "basicRate", label: "Sum of Basic 1%" },
+  { key: "otherDeductions", label: "Sum of Other Deductions" },
+  { key: "salaryForPeriod", label: "Sum of Salary for Period" },
+];
+
+const escapeHtml = (s) =>
+  String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const formatAccountingCurrency = (n) => {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "—";
+  return x.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
+const renderDashboardAccountingPivot = (result, emptyHint = "no-period") => {
+  const table = dashboardAccountingPivotTable;
+  const thead = dashboardAccountingPivotHead;
+  const tbody = dashboardAccountingPivotBody;
+  if (!table || !tbody) return;
+  const colCount = DASHBOARD_ACCOUNTING_TABLE_COLUMNS.length + 1;
+  if (!result) {
+    if (thead) thead.innerHTML = "";
+    const msg =
+      emptyHint === "no-rows"
+        ? "No payroll data for this period."
+        : "Select a report period to load the accounting pivot.";
+    tbody.innerHTML = `<tr><td class="accounting-pivot-empty muted" colspan="${colCount}">${msg}</td></tr>`;
+    table.hidden = false;
+    return;
+  }
+  const { pivotByCostCenter, sortedCenters, grandTotal } = result;
+  if (thead) {
+    thead.innerHTML = `<tr><th scope="col" class="accounting-pivot-corner">Row Labels</th>${DASHBOARD_ACCOUNTING_TABLE_COLUMNS.map(
+      (c) => `<th scope="col">${escapeHtml(c.label)}</th>`
+    ).join("")}</tr>`;
+  }
+  if (!sortedCenters.length) {
+    tbody.innerHTML = `<tr><td class="accounting-pivot-empty muted" colspan="${colCount}">No cost centers for this period.</td></tr>`;
+    table.hidden = false;
+    return;
+  }
+  const bodyRows = sortedCenters
+    .map((labelKey) => {
+      const row = pivotByCostCenter.get(labelKey);
+      const displayLabel = labelKey === "(blank)" ? "(blank)" : labelKey;
+      const cells = DASHBOARD_ACCOUNTING_TABLE_COLUMNS.map(
+        (col) =>
+          `<td class="accounting-num">${formatAccountingCurrency(row?.[col.key] ?? 0)}</td>`
+      ).join("");
+      return `<tr><th scope="row" class="accounting-pivot-row-label">${escapeHtml(displayLabel)}</th>${cells}</tr>`;
+    })
+    .join("");
+  const totalCells = DASHBOARD_ACCOUNTING_TABLE_COLUMNS.map(
+    (col) =>
+      `<td class="accounting-num accounting-grand-total">${formatAccountingCurrency(
+        grandTotal[col.key] ?? 0
+      )}</td>`
+  ).join("");
+  tbody.innerHTML = `${bodyRows}<tr class="accounting-pivot-grand-row"><th scope="row">Grand Total</th>${totalCells}</tr>`;
+  table.hidden = false;
+};
+
 const renderDashboardCharts = async () => {
-  if (typeof Chart === "undefined") return;
-  const range = getDashboardReportRange();
-  if (!range) return;
+  const gen = ++dashboardChartsRenderGeneration;
+  const fortnightValue = dashboardChartPeriod?.value || "";
+  if (!fortnightValue || !fortnightValue.includes("_")) {
+    setDashboardSnapshotLoading(false);
+    clearDashboardSnapshotStatusLine();
+    updateDashboardPayrollSnapshotFromPivot(null);
+    renderDashboardAccountingPivot(null, "no-period");
+    return;
+  }
 
-  const result = await getReportPivotData(range);
-  if (!result) return;
-
-  const { pivotByCostCenter, sortedCenters } = result;
-  const labels = sortedCenters.filter((l) => l !== "(blank)");
-  const colors = labels.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
-
-  const DASHBOARD_CHART_SPECS = [
-    { id: "chartTaxableEarning", key: "taxableEarning", field: "taxableEarning" },
-    { id: "chartArrears", key: "arrears", field: "arrears" },
-    { id: "chartCompass", key: "compass", field: "compass" },
-    { id: "chartMetLeave", key: "metLeave", field: "metLeave" },
-    { id: "chartAnnualLeave", key: "annualLeave", field: "annualLeave" },
-    { id: "chartTotalEarning", key: "totalEarning", field: "totalEarning" },
-    { id: "chartNpf5", key: "npf5", field: "npfEE" },
-    { id: "chartNpf75", key: "npf75", field: "npfER" },
-    { id: "chartVoluntaryNpf", key: "voluntaryNpf", field: "voluntaryNpf" },
-    { id: "chartPayeA", key: "payeA", field: "payeA" },
-    { id: "chartBasic1", key: "basic1", field: "basicRate" },
-    { id: "chartOtherDedu", key: "otherDedu", field: "otherDeductions" },
-    { id: "chartSalaryForPeriod", key: "salaryForPeriod", field: "salaryForPeriod" },
-    { id: "chartAmountRO", key: "amountRO", field: "amountRO" },
-  ];
-
-  const destroyChart = (key) => {
-    if (dashboardCharts[key]) {
-      dashboardCharts[key].destroy();
-      dashboardCharts[key] = null;
+  setDashboardSnapshotLoading(true);
+  try {
+    const payload = await getReportPivotData(fortnightValue);
+    if (gen !== dashboardChartsRenderGeneration) return;
+    if (!payload.ok) {
+      setDashboardSnapshotError(
+        payload.error ||
+          "Could not load payroll data. Check that the server is running and try again."
+      );
+      zeroDashboardPayrollSnapshotTotals();
+      renderDashboardAccountingPivot(null, "no-rows");
+      return;
     }
-  };
-
-  DASHBOARD_CHART_SPECS.forEach((spec) => destroyChart(spec.key));
-
-  const getData = (field) => labels.map((l) => pivotByCostCenter.get(l)?.[field] || 0);
-
-  const barOptions = {
-    responsive: true,
-    maintainAspectRatio: true,
-    plugins: { legend: { display: false } },
-    scales: { y: { beginAtZero: true } },
-  };
-
-  DASHBOARD_CHART_SPECS.forEach((spec) => {
-    const el = document.getElementById(spec.id);
-    if (el) {
-      dashboardCharts[spec.key] = new Chart(el, {
-        type: "bar",
-        data: {
-          labels,
-          datasets: [{ label: spec.field, data: getData(spec.field), backgroundColor: colors }],
-        },
-        options: barOptions,
-      });
+    updateDashboardPayrollSnapshotFromPivot(payload.result);
+    if (payload.result) {
+      renderDashboardAccountingPivot(payload.result);
+    } else {
+      renderDashboardAccountingPivot(null, "no-rows");
     }
+    if (typeof Chart === "undefined" || !payload.result) return;
+    if (gen !== dashboardChartsRenderGeneration) return;
+
+    const { pivotByCostCenter, sortedCenters } = payload.result;
+    const labels = sortedCenters.map((l) => (l === "(blank)" ? "Unassigned" : l));
+    const colors = labels.map((_, i) => CHART_COLORS[i % CHART_COLORS.length]);
+
+    destroyAllDashboardCharts();
+    if (gen !== dashboardChartsRenderGeneration) return;
+
+    const getData = (field) =>
+      sortedCenters.map((l) => pivotByCostCenter.get(l)?.[field] || 0);
+
+    DASHBOARD_CHART_SPECS.forEach((spec) => {
+      const el = document.getElementById(spec.id);
+      const heading = el?.closest(".chart-container")?.querySelector("h3");
+      if (heading) heading.textContent = `${spec.title} by Cost Center`;
+      if (el) {
+        dashboardCharts[spec.key] = new Chart(el, {
+          type: "bar",
+          data: {
+            labels,
+            datasets: [{ label: spec.title, data: getData(spec.field), backgroundColor: colors }],
+          },
+          options: DASHBOARD_BAR_CHART_OPTIONS,
+        });
+      }
+    });
+  } finally {
+    if (gen === dashboardChartsRenderGeneration) {
+      setDashboardSnapshotLoading(false);
+    }
+  }
+};
+
+const scheduleDashboardChartsFromPeriodSelect = () => {
+  if (dashboardChartPeriodDebounceTimer) clearTimeout(dashboardChartPeriodDebounceTimer);
+  dashboardChartPeriodDebounceTimer = setTimeout(() => {
+    dashboardChartPeriodDebounceTimer = null;
+    renderDashboardCharts();
+  }, 150);
+};
+
+const refreshDashboardPayrollIfVisible = () => {
+  const dash = document.getElementById("dashboard");
+  if (dash && !dash.classList.contains("section-hidden")) {
+    renderDashboardCharts();
+  }
+};
+
+const downloadDashboardExcel = async () => {
+  if (typeof XLSX === "undefined") {
+    alert("Excel library not loaded. Please refresh the page.");
+    return;
+  }
+  const fortnightValue = dashboardChartPeriod?.value || "";
+  if (!fortnightValue || !fortnightValue.includes("_")) {
+    alert("Select a report period first.");
+    return;
+  }
+  const payload = await getReportPivotData(fortnightValue);
+  if (!payload.ok) {
+    alert(
+      payload.error ||
+        "Could not load payroll data. Check that the server is running and try again."
+    );
+    return;
+  }
+  if (!payload.result) {
+    alert("No data available for the selected period.");
+    return;
+  }
+  const { pivotByCostCenter, sortedCenters, grandTotal } = payload.result;
+  const headerRow = ["Row Labels", ...DASHBOARD_ACCOUNTING_TABLE_COLUMNS.map((c) => c.label)];
+  const dataRows = sortedCenters.map((labelKey) => {
+    const row = pivotByCostCenter.get(labelKey);
+    const displayLabel = labelKey === "(blank)" ? "(blank)" : labelKey;
+    return [
+      displayLabel,
+      ...DASHBOARD_ACCOUNTING_TABLE_COLUMNS.map((c) => row?.[c.key] ?? 0),
+    ];
   });
+  const totalRow = [
+    "Grand Total",
+    ...DASHBOARD_ACCOUNTING_TABLE_COLUMNS.map((c) => grandTotal[c.key] ?? 0),
+  ];
+  const wsData = [headerRow, ...dataRows, totalRow];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  const wb = XLSX.utils.book_new();
+  const periodLabel = (dashboardChartPeriod?.options[dashboardChartPeriod?.selectedIndex]?.text || "report").replace(/\s+/g, "_");
+  XLSX.utils.book_append_sheet(wb, ws, "Dashboard");
+  XLSX.writeFile(wb, `HR_Dashboard_${periodLabel}.xlsx`);
 };
 
 const getShiftFromLogsForPeriod = (logs) => {
@@ -765,19 +1138,12 @@ const loadAttendanceSheetData = async () => {
   const thEe = document.createElement("th");
   thEe.textContent = "Ee #";
   row1.appendChild(thEe);
-  const thDownload = document.createElement("th");
-  thDownload.textContent = "Download";
-  thDownload.title = "Download PDF or Excel for this employee";
-  row1.appendChild(thDownload);
   const thNames = document.createElement("th");
   thNames.textContent = "Names";
   row1.appendChild(thNames);
   const thCc = document.createElement("th");
   thCc.textContent = "Cost Center";
   row1.appendChild(thCc);
-  const thShift = document.createElement("th");
-  thShift.textContent = "Shift";
-  row1.appendChild(thShift);
   range.dates.forEach((d) => {
     const th = document.createElement("th");
     th.className = "attendance-date-col" + (d.dayName === "Sun" ? " attendance-sunday" : "");
@@ -797,9 +1163,18 @@ const loadAttendanceSheetData = async () => {
   thOt.className = "attendance-ot-col";
   thOt.innerHTML = `<span class="header-main">OT</span><span class="header-sub">Time ½</span>`;
   row1.appendChild(thOt);
-  ["PH/ DO", "PH Pay", "Sick Day", "Compassionate", "MET Leave", "Annual Leave", "HHS", "Conveyance All."].forEach((label) => {
+  const extraCols = [
+    { label: "PH/ DO", cls: "attendance-extra-col" },
+    { label: "PH Pay", cls: "attendance-extra-col" },
+    { label: "Sick Day", cls: "attendance-extra-col" },
+    { label: "MET Leave", cls: "attendance-extra-col" },
+    { label: "Annual Leave", cls: "attendance-extra-col" },
+    { label: "HHS", cls: "attendance-extra-col attendance-col-hhs" },
+    { label: "Conveyance All.", cls: "attendance-extra-col attendance-col-conveyance" },
+  ];
+  extraCols.forEach(({ label, cls }) => {
     const th = document.createElement("th");
-    th.className = "attendance-extra-col";
+    th.className = cls;
     th.textContent = label;
     row1.appendChild(th);
   });
@@ -826,10 +1201,10 @@ const loadAttendanceSheetData = async () => {
   const preservedPhDo = new Map();
   const preservedPhPay = new Map();
   const preservedSickDays = new Map();
-  const preservedCompassionate = new Map();
   const preservedMetLeave = new Map();
   const preservedAnnualLeave = new Map();
-  const preservedConveyance = new Map();
+  const preservedConveyanceTiers = new Map();
+  const preservedHhs = new Map();
   const preservedDayValues = new Map();
   const localData = loadAttendanceSheetFromStorage(value);
   const serverDataForPeriod = serverManual && typeof serverManual === "object" ? (serverManual[value] || {}) : {};
@@ -843,10 +1218,12 @@ const loadAttendanceSheetData = async () => {
     if (d.phDo != null) preservedPhDo.set(eid, String(d.phDo));
     if (d.phPay != null && Number.isFinite(d.phPay)) preservedPhPay.set(eid, String(d.phPay));
     if (d.sickDays != null) preservedSickDays.set(eid, String(d.sickDays));
-    if (d.compassionate != null) preservedCompassionate.set(eid, String(d.compassionate));
     if (d.metLeave != null && Number.isFinite(d.metLeave)) preservedMetLeave.set(eid, String(d.metLeave));
     if (d.annualLeave != null && Number.isFinite(d.annualLeave)) preservedAnnualLeave.set(eid, String(d.annualLeave));
-    if (d.conveyanceAll != null && Number.isFinite(d.conveyanceAll)) preservedConveyance.set(eid, String(d.conveyanceAll));
+    if (d.conveyanceDayTiers && Array.isArray(d.conveyanceDayTiers)) {
+      preservedConveyanceTiers.set(eid, d.conveyanceDayTiers.map((t) => clampConveyanceTier(t)));
+    }
+    if (d.hhs != null) preservedHhs.set(eid, String(d.hhs));
   });
   const expectedDayCount = range?.dates?.length || 0;
   attendanceSheetTable.querySelectorAll("tr")?.forEach((tr) => {
@@ -868,14 +1245,19 @@ const loadAttendanceSheetData = async () => {
     if (phPayInput) preservedPhPay.set(eid, phPayInput.value.trim());
     const sickInput = tr.querySelector(".attendance-sick-input");
     if (sickInput) preservedSickDays.set(eid, sickInput.value.trim());
-    const compInput = tr.querySelector(".attendance-compassionate-input");
-    if (compInput) preservedCompassionate.set(eid, compInput.value.trim());
     const metInput = tr.querySelector(".attendance-metleave-input");
     if (metInput) preservedMetLeave.set(eid, metInput.value.trim());
     const annInput = tr.querySelector(".attendance-annualleave-input");
     if (annInput) preservedAnnualLeave.set(eid, annInput.value.trim());
-    const convInput = tr.querySelector(".attendance-conveyance-input");
-    if (convInput) preservedConveyance.set(eid, convInput.value.trim());
+    const tierSelects = tr.querySelectorAll(".attendance-conveyance-tier-select");
+    if (eid && tierSelects.length === expectedDayCount && expectedDayCount > 0) {
+      preservedConveyanceTiers.set(
+        eid,
+        Array.from(tierSelects).map((s) => clampConveyanceTier(s.value))
+      );
+    }
+    const hhsInput = tr.querySelector(".attendance-hhs-input");
+    if (hhsInput) preservedHhs.set(eid, hhsInput.value.trim());
   });
 
   attendanceSheetTable.innerHTML = "";
@@ -887,14 +1269,16 @@ const loadAttendanceSheetData = async () => {
     const logs = logsByEmployee.get(employeeId) || [];
     const arrears = Number(employee.arrears || 0);
     const compass = Number(employee.compass || 0);
-    const voluntaryNpf = Number(employee.voluntaryNpf || 0);
+    const voluntaryNpfPct = Number(employee.voluntaryNpf || 0);
+    const rentAllowance = Number(employee.rentAllowance || 0);
     const otherDeductions = Number(employee.otherDeductions || 0);
     const metrics = buildPayrollMetrics(employee, logs, {
       publicHoliday: false,
       housingRate: employee.hAllow,
       arrears,
       compass,
-      voluntaryNpf,
+      voluntaryNpf: voluntaryNpfPct,
+      rentAllowance,
       otherDeductions,
     });
     const shift =
@@ -927,41 +1311,76 @@ const loadAttendanceSheetData = async () => {
     const phDoVal = preservedPhDo.get(employeeId) ?? "";
     const phDoNum = parseFloat(phDoVal) || 0;
     const sickVal = preservedSickDays.get(employeeId) ?? "";
-    const compVal = preservedCompassionate.get(employeeId) ?? "";
     const phPayVal = preservedPhPay.get(employeeId) ?? "";
     const metLeaveVal = preservedMetLeave.get(employeeId) ?? "";
     const annualLeaveVal = preservedAnnualLeave.get(employeeId) ?? "";
 
     const normalHours = Math.max(0, totalWorkCapped - manualOt - phDoNum);
-    const hhsVal = normalHours * 0.5;
-    const conveyanceVal = calculateConveyanceAllowanceForSpec(logs, dayValues, shift, employee.basicWage, normalHours);
-    const conveyanceValPreserved = preservedConveyance.get(employeeId);
-    const conveyanceDisplay = conveyanceValPreserved !== undefined && conveyanceValPreserved !== ""
-      ? conveyanceValPreserved
-      : (conveyanceVal > 0 ? conveyanceVal.toFixed(2) : "");
+    const cc = (costCenter || "").trim().toUpperCase();
+    const hhsEligible = cc === "H K" || cc === "HK" || cc === "POMEC";
+    const calculatedHhs = calculateFormulaHhs(normalHours, sickVal, hhsEligible);
+    const hhsPreserved = preservedHhs.get(employeeId);
+    const hhsDisplay =
+      hhsPreserved !== undefined ? hhsPreserved : calculatedHhs.toFixed(2);
+    const savedEntry = savedData[employeeId] || {};
+    const savedTiersFromFile = savedEntry.conveyanceDayTiers;
+    const hasSavedTiers =
+      Array.isArray(savedTiersFromFile) && savedTiersFromFile.length === range.dates.length;
+    let tiersForRow = range.dates.map(() => 0);
+    const fromDomPres = preservedConveyanceTiers.get(employeeId);
+    if (fromDomPres && fromDomPres.length === range.dates.length) {
+      tiersForRow = fromDomPres.map((t) => clampConveyanceTier(t));
+    } else if (hasSavedTiers) {
+      tiersForRow = savedTiersFromFile.map((t) => clampConveyanceTier(t));
+    }
+
+    const conveyanceComputed = computeConveyanceFromDayTiersAndHours(dayValues, tiersForRow);
+    const savedConv = savedEntry.conveyanceAll;
+    const useConveyanceFixed =
+      savedEntry.conveyanceFixed === true &&
+      savedConv != null &&
+      savedConv !== "" &&
+      !Number.isNaN(Number(savedConv));
+    const conveyanceDisplay = useConveyanceFixed
+      ? (Number(savedConv) || 0).toFixed(2)
+      : conveyanceComputed > 0
+        ? conveyanceComputed.toFixed(2)
+        : "";
 
     let html = `<td>${employeeId}</td>`;
-    html += `<td class="attendance-download-cell"><button type="button" class="attendance-sheet-download-excel" title="Download Excel">Excel</button><button type="button" class="attendance-sheet-download-pdf" title="Download PDF">PDF</button></td>`;
     html += `<td>${employee.names || ""}</td><td>${costCenter}</td>`;
-    html += `<td>${shift || ""}</td>`;
     range.dates.forEach((d, i) => {
       const isSunday = d.dayName === "Sun";
       const cellClass = isSunday ? "attendance-day-sunday" : "";
       const val = dayValues[i] || "";
-      html += `<td class="${cellClass}"><input type="number" class="attendance-day-input" data-employee-id="${employeeId}" data-day-index="${i}" value="${val}" placeholder="0" min="0" max="7.5" step="0.01" size="4" /></td>`;
+      const tierVal = tiersForRow[i] ?? 0;
+      const t0 = tierVal === 0 ? " selected" : "";
+      const t1 = tierVal === 1 ? " selected" : "";
+      const t2 = tierVal === 2 ? " selected" : "";
+      html += `<td class="${cellClass} attendance-day-cell"><div class="attendance-day-stack">
+<input type="number" class="attendance-day-input" data-employee-id="${employeeId}" data-day-index="${i}" value="${val}" placeholder="0" min="0" max="24" step="0.01" size="4" title="Hours worked" />
+<select class="attendance-conveyance-tier-select" data-employee-id="${employeeId}" data-day-index="${i}" title="Conveyance: 0 = none; 1 = $7.50; 2 = $15 (counts only when hours &gt; 0)">
+<option value="0"${t0}>0</option>
+<option value="1"${t1}>1</option>
+<option value="2"${t2}>2</option>
+</select>
+</div></td>`;
     });
-    html += `<td class="attendance-total-cell">${asMoney(totalWorkCapped)}</td>`;
+    html += `<td class="attendance-total-cell" title="Auto-calculated from daily hours">${asMoney(totalWorkCapped)}</td>`;
     html += `<td class="attendance-normal-cell">${asMoney(normalHours)}</td>`;
     html += `<td><input type="number" class="attendance-ot-input" data-employee-id="${employeeId}" value="${manualOt > 0 ? manualOt.toFixed(2) : ""}" placeholder="0" min="0" step="0.01" size="5" /></td>`;
     html += `<td><input type="number" class="attendance-phdo-input" data-employee-id="${employeeId}" value="${phDoVal || ""}" placeholder="0" min="0" step="0.01" size="3" /></td>`;
     html += `<td><input type="number" class="attendance-phpay-input" data-employee-id="${employeeId}" value="${phPayVal || ""}" placeholder="0" min="0" step="0.01" size="5" /></td>`;
     html += `<td><input type="number" class="attendance-sick-input" data-employee-id="${employeeId}" value="${sickVal || ""}" placeholder="0" min="0" step="0.01" size="3" /></td>`;
-    html += `<td><input type="number" class="attendance-compassionate-input" data-employee-id="${employeeId}" value="${compVal || ""}" placeholder="0" min="0" step="0.01" size="3" /></td>`;
     html += `<td><input type="number" class="attendance-metleave-input" data-employee-id="${employeeId}" value="${metLeaveVal || ""}" placeholder="0" min="0" step="0.01" size="5" /></td>`;
-    html += `<td><input type="number" class="attendance-annualleave-input" data-employee-id="${employeeId}" value="${annualLeaveVal || ""}" placeholder="0" min="0" step="0.01" size="5" /></td>`;
-    html += `<td class="attendance-hhs-cell">${asMoney(hhsVal)}</td>`;
-    html += `<td><input type="number" class="attendance-conveyance-input" data-employee-id="${employeeId}" value="${conveyanceDisplay}" placeholder="0" min="0" step="0.01" size="5" title="Conveyance Allowance" /></td>`;
+    html += `<td><input type="number" class="attendance-annualleave-input" data-employee-id="${employeeId}" value="${annualLeaveVal || ""}" placeholder="0" min="0" step="0.01" size="5" title="Annual leave units (e.g. days). Pay = 7.5 × (Basic wage/hr + Housing all/hr) × this value" /></td>`;
+    html += `<td class="attendance-cell-hhs"><div class="attendance-money-box attendance-money-box--hhs"><input type="number" class="attendance-hhs-input" data-employee-id="${employeeId}" value="${hhsDisplay}" placeholder="0" min="0" step="0.01" inputmode="decimal" title="HHS: (Normal × 0.5) − (Sick days × ${HHS_SICK_DAY_DEDUCTION}) for H K, HK, POMEC. Editable to override." /></div></td>`;
+    const convTitle = useConveyanceFixed
+      ? "Conveyance total for payroll (saved). Tier 0/1/2 is best fit; change a tier or day to recalc from tiers only."
+      : "Total from daily tiers (0 / $7.50 / $15) — only counts on days with hours &gt; 0; not editable";
+    html += `<td class="attendance-cell-conveyance"><div class="attendance-money-box attendance-money-box--conveyance"><input type="number" class="attendance-conveyance-input" data-employee-id="${employeeId}" value="${conveyanceDisplay}" placeholder="0" min="0" step="0.01" inputmode="decimal" readonly aria-readonly="true" tabindex="-1" title="${convTitle}" /></div></td>`;
     row.innerHTML = html;
+    if (useConveyanceFixed) row.dataset.conveyanceFixed = "1";
     attendanceSheetTable.appendChild(row);
 
     attendanceSheetEntries.push({
@@ -975,16 +1394,17 @@ const loadAttendanceSheetData = async () => {
       phDo: phDoVal,
       phPay: phPayVal,
       sickDays: sickVal,
-      compassionate: compVal,
       metLeave: metLeaveVal,
       annualLeave: annualLeaveVal,
-      conveyanceAll: parseFloat(conveyanceDisplay) || conveyanceVal,
+      conveyanceAll: useConveyanceFixed ? Number(savedConv) || 0 : conveyanceComputed,
+      conveyanceFixed: useConveyanceFixed,
+      conveyanceDayTiers: tiersForRow,
       voluntaryNpf: metrics.voluntaryNpf,
       housingRate: metrics.housingRate,
       basePay: metrics.basePay,
       otPay: metrics.otPay,
       housingAllowance: metrics.housingAllowance,
-      hhs: hhsVal,
+      hhs: parseFloat(hhsDisplay) || 0,
       arrears: metrics.arrears,
       compass: metrics.compass,
       taxableEarning: metrics.taxableEarning,
@@ -999,6 +1419,16 @@ const loadAttendanceSheetData = async () => {
     });
   });
   attendanceSheetFortnightValue = value;
+  invalidateReportPivotCache();
+  refreshDashboardPayrollIfVisible();
+};
+
+/** PH x 2: basic wage × PH/DO hours × 2 */
+const phPayFromPhDoHours = (basicWage, phDoRaw) => {
+  const phDo = Number(phDoRaw) || 0;
+  const bw = Number(basicWage) || 0;
+  if (phDo <= 0) return 0;
+  return bw * phDo * 2;
 };
 
 const buildPayrollFromAttendanceEntry = (employee, attEntry) => {
@@ -1009,26 +1439,41 @@ const buildPayrollFromAttendanceEntry = (employee, attEntry) => {
   const normalHours = Math.max(0, normal);
   const otHours = Number(attEntry?.totalOvertime || 0);
   const phDo = Number(attEntry?.phDo || 0);
-  const phPay = Number(attEntry?.phPay || 0);
+  const phPay = phPayFromPhDoHours(basicWage, attEntry?.phDo);
   const arrears = Number(attEntry?.arrears ?? employee.arrears ?? 0);
   const compass = Number(attEntry?.compass ?? employee.compass ?? 0);
   const metLeave = Number(attEntry?.metLeave ?? 0);
-  const annualLeave = Number(attEntry?.annualLeave ?? 0);
+  const annualLeaveUnits = Number(attEntry?.annualLeave ?? 0);
+  const annualLeaveAmount = annualLeavePayFromAttendance(
+    basicWage,
+    housingRate,
+    annualLeaveUnits
+  );
+  const sickDaysDed = Number(attEntry?.sickDays ?? 0);
+  const compassionateDed = 0;
   const hhs = Number(attEntry?.hhs ?? 0);
   const conveyance = Number(attEntry?.conveyanceAll ?? 0);
-  const voluntaryNpf = Number(employee.voluntaryNpf || 0);
-  const otherDeductions = Number(employee.otherDeductions || 0);
+  const rentAllowance = Number(attEntry?.rentAllowance ?? employee.rentAllowance ?? 0);
+  const voluntaryNpfPct = Number(attEntry?.voluntaryNpf ?? employee.voluntaryNpf ?? 0);
+  let otherDeductions = Number(employee.otherDeductions || 0);
+  if (attEntry != null) {
+    const rawOd = attEntry.otherDeductions;
+    if (rawOd != null && rawOd !== "" && Number.isFinite(Number(rawOd))) {
+      otherDeductions = Number(rawOd);
+    }
+  }
 
   const basicSalary = basicWage * normalHours;
   const otSalary = basicWage * 1.5 * otHours;
   const housingAllowance = housingRate * (normalHours + otHours + phDo);
   const taxableEarning =
-    basicSalary + otSalary + phPay + housingAllowance + arrears + compass +
+    basicSalary + otSalary + phPay + housingAllowance + rentAllowance + arrears + compass +
     metLeave + hhs + conveyance;
-  const totalEarning = taxableEarning + annualLeave;
+  const totalEarning = taxableEarning + annualLeaveAmount;
+  const voluntaryNpfAmount = voluntaryNpfAmountFromPercent(totalEarning, voluntaryNpfPct);
   const npf5 = totalEarning * 0.05;
   const npf75 = totalEarning * 0.075;
-  const basic1 = basicSalary * 0.01;
+  const basicRate1 = basicSalary * 0.01;
   const annualized = totalEarning * 26;
   let payeA = 0;
   if (totalEarning < 1156.92) payeA = 0;
@@ -1036,13 +1481,22 @@ const buildPayrollFromAttendanceEntry = (employee, attEntry) => {
   else if (totalEarning < 2310.78) payeA = (annualized - 30080 - 15000) * 0.23 / 26 + 63.46;
   else if (totalEarning < 3464.63) payeA = (annualized - 30080 - 30000) * 0.35 / 26 + 63.46 + 132.69;
   else payeA = (annualized - 30080 - 60000) * 0.4 / 26 + 63.46 + 132.69 + 403.85;
-  const salaryForPeriod =
-    totalEarning - npf5 - npf75 - voluntaryNpf - payeA - basic1 - otherDeductions;
+  /** Split PAYE for accounting pivot; use raw numbers so splits sum to payeA (remainder on AL). */
+  const payeSplitA = totalEarning > 0 ? payeA * (taxableEarning / totalEarning) : 0;
+  const payeSplitAL = payeA - payeSplitA;
+  const salaryForPeriod = computeSalaryForPeriod({
+    totalEa: totalEarning,
+    basicSalary,
+    voluntaryNpfPct,
+    payeA,
+    otherDeductions,
+  });
 
+  const costCenterFromSheet = attEntry && String(attEntry.costCenter || "").trim();
   return {
     employeeId: String(employee.employeeId || ""),
     employeeName: employee.names || "",
-    costCenter: employee.costCenter || employee.department || "",
+    costCenter: costCenterFromSheet || employee.costCenter || employee.department || "",
     employee: employee.startDate || "",
     npfNumber: employee.npf || "",
     bspAccount: employee.bsp || "",
@@ -1052,22 +1506,29 @@ const buildPayrollFromAttendanceEntry = (employee, attEntry) => {
     overTimeS: asM(otSalary),
     public: asM(phPay),
     housingA: asM(housingAllowance),
+    rentA: asM(rentAllowance),
     hhs: asM(hhs),
     conveyance: asM(conveyance),
     arrears: asM(arrears),
     compassOf: asM(compass),
     metLeave: asM(metLeave),
     taxableE: asM(taxableEarning),
-    annual: asM(annualLeave),
+    annual: asM(annualLeaveAmount),
     totalEa: asM(totalEarning),
     npf5: asM(npf5),
     npf75: asM(npf75),
-    voluntaryN: asM(voluntaryNpf),
+    voluntaryN: asM(voluntaryNpfAmount),
+    voluntaryNpfPct: voluntaryNpfPct === 0 ? "" : voluntaryNpfPct,
     payeA: asM(payeA),
-    basic1: asM(basic1),
+    payeSplitA: asM(payeSplitA),
+    payeSplitAL: asM(payeSplitAL),
+    basic1: asM(basicRate1),
     otherDedu: asM(otherDeductions),
+    sickDaysDed: asM(sickDaysDed),
+    compassionateDed: asM(compassionateDed),
+    metLeaveDed: asM(metLeave),
+    annualLeaveDed: asM(annualLeaveAmount),
     salaryFor: asM(salaryForPeriod),
-    salaryForRo: asM(Math.round(salaryForPeriod)),
   };
 };
 
@@ -1272,6 +1733,222 @@ const loadAttendanceSheetManualFromServer = async () => {
   return null;
 };
 
+/** Merged manual rows for one fortnight (server + localStorage; local wins). */
+const getAttendanceManualFortnightMerged = async (fortnightValue) => {
+  if (!fortnightValue) return {};
+  const serverAll = (await loadAttendanceSheetManualFromServer()) || {};
+  const serverPeriod =
+    serverAll && typeof serverAll === "object" ? serverAll[fortnightValue] || {} : {};
+  const localPeriod = loadAttendanceSheetFromStorage(fortnightValue) || {};
+  return { ...serverPeriod, ...localPeriod };
+};
+
+const resolveRentAllowanceForFortnight = async (employee, fallbackOverride) => {
+  const fortnight = payrollFortnight?.value || attendanceFortnight?.value || "";
+  if (fortnight && fortnight.includes("_")) {
+    const manual = await getAttendanceManualFortnightMerged(fortnight);
+    const eid = String(employee.employeeId || "");
+    const m = manual[eid]?.rentAllowance;
+    if (m != null && m !== "" && Number.isFinite(Number(m))) return Number(m);
+  }
+  if (fallbackOverride != null && fallbackOverride !== "" && Number.isFinite(Number(fallbackOverride))) {
+    return Number(fallbackOverride);
+  }
+  return Number(employee.rentAllowance) || 0;
+};
+
+/** DOM attendance sheet rows override saved manual JSON for the same fortnight. */
+const resolveAttendanceSheetEntry = (employeeId, manualFortnight, domEntries) => {
+  const eid = String(employeeId || "");
+  if (domEntries && domEntries.length) {
+    const fromDom = domEntries.find((e) => String(e.employeeId || "") === eid);
+    if (fromDom) return fromDom;
+  }
+  const fromManual = manualFortnight[eid] ?? manualFortnight[employeeId];
+  if (fromManual && typeof fromManual === "object") return fromManual;
+  return null;
+};
+
+/**
+ * Same payroll rows as Payroll tab (Load Logs): biometric table + logs for the fortnight,
+ * merged with attendance-sheet-manual (and optional in-memory sheet rows).
+ */
+const buildPayrollRowsForFortnight = async (fortnightValue, domEntries = null) => {
+  if (!fortnightValue || !fortnightValue.includes("_") || !employeesCache.length) return [];
+  const range = getFortnightDateRange(fortnightValue);
+  if (!range) return [];
+  const rangeObj = {
+    start: formatDateForStorage(range.startIso),
+    end: formatDateForStorage(range.endIso),
+  };
+  const [tableRows, allLogs] = await Promise.all([
+    loadAttendanceTableForPeriod(rangeObj),
+    loadAllAttendanceLogsForPeriod(rangeObj),
+  ]);
+  const manualFortnight = await getAttendanceManualFortnightMerged(fortnightValue);
+
+  const workByEmployeeDate = new Map();
+  const overtimeByEmployeeDate = new Map();
+  const resolveEmployeeId = (tableUserId) => {
+    const uid = String(tableUserId || "").trim();
+    if (!uid) return null;
+    const match = employeesCache.find(
+      (e) =>
+        String(e.employeeId || "") === uid ||
+        (Number(e.employeeId) === Number(uid) && !Number.isNaN(Number(uid)))
+    );
+    if (match) return String(match.employeeId || "");
+    const numPart = uid.replace(/^[A-Za-z_-]+/, "") || uid;
+    const numMatch = employeesCache.find(
+      (e) =>
+        String(e.employeeId || "") === numPart ||
+        Number(e.employeeId) === Number(numPart)
+    );
+    return numMatch ? String(numMatch.employeeId || "") : uid;
+  };
+  tableRows.forEach((row) => {
+    const tableUserId = String(row.userId || row.employeeId || "").trim();
+    const empId = resolveEmployeeId(tableUserId) || tableUserId;
+    const dateKey = toDateKey(row.date);
+    if (!empId || !dateKey) return;
+    const rawWork = parseFloat(row.work) || 0;
+    const work = Math.min(rawWork, MAX_DAILY_HOURS);
+    const overtime = parseFloat(row.overtime) || 0;
+    workByEmployeeDate.set(`${empId}__${dateKey}`, work);
+    overtimeByEmployeeDate.set(`${empId}__${dateKey}`, overtime);
+  });
+
+  const logsByEmployee = new Map();
+  allLogs.forEach((log) => {
+    if (!log?.employeeId) return;
+    const empId = resolveEmployeeId(log.employeeId) || String(log.employeeId);
+    if (!logsByEmployee.has(empId)) logsByEmployee.set(empId, []);
+    logsByEmployee.get(empId).push(log);
+  });
+  const summariesFromLogs = [];
+  logsByEmployee.forEach((entries, employeeId) => {
+    summariesFromLogs.push(...calculateAttendanceSummary(entries));
+  });
+  summariesFromLogs.forEach((s) => {
+    const dateKey = toDateKey(s.date);
+    if (!dateKey) return;
+    const empId = resolveEmployeeId(s.employeeId) || String(s.employeeId || "");
+    const key = `${empId}__${dateKey}`;
+    if (!workByEmployeeDate.has(key)) {
+      const rawHours = s.totalHours || 0;
+      const work = Math.min(rawHours, MAX_DAILY_HOURS);
+      workByEmployeeDate.set(key, work);
+      overtimeByEmployeeDate.set(key, 0);
+    }
+  });
+
+  const dateKeys = range.dates?.map((d) => toDateKey(d.iso)).filter(Boolean) || [];
+  const rows = [];
+  employeesCache.forEach((employee) => {
+    const employeeId = String(employee.employeeId || "");
+    let totalWork = 0;
+    let totalOvertime = 0;
+    dateKeys.forEach((dk) => {
+      totalWork += Number(workByEmployeeDate.get(`${employeeId}__${dk}`) || 0);
+      totalOvertime += Number(overtimeByEmployeeDate.get(`${employeeId}__${dk}`) || 0);
+    });
+    const attEntryFromSheet = resolveAttendanceSheetEntry(employeeId, manualFortnight, domEntries);
+    if (attEntryFromSheet && totalWork === 0) {
+      totalWork = Number(attEntryFromSheet.totalWork || 0);
+      totalOvertime = Number(attEntryFromSheet.totalOvertime || 0);
+    }
+    totalWork = Math.min(totalWork, MAX_FORTNIGHT_HOURS);
+
+    const logs = logsByEmployee.get(employeeId) || [];
+    const shift =
+      attEntryFromSheet?.shift ||
+      getShiftFromLogsForPeriod(logs) ||
+      todayShiftByEmployee.get(employeeId) ||
+      "";
+    let dayValues = range.dates.map((d) => {
+      const dk = toDateKey(d.iso);
+      const v = dk ? (workByEmployeeDate.get(`${employeeId}__${dk}`) || 0) : 0;
+      return v > 0 ? v.toFixed(2) : "";
+    });
+    if (
+      attEntryFromSheet?.dayValues &&
+      dayValues.every((v) => !v) &&
+      attEntryFromSheet.dayValues.length > 0
+    ) {
+      dayValues = attEntryFromSheet.dayValues.map((v) =>
+        v && parseFloat(v) > 0 ? String(parseFloat(v).toFixed(2)) : ""
+      );
+    }
+
+    const manualOt = attEntryFromSheet ? Number(attEntryFromSheet.totalOvertime || 0) : totalOvertime;
+    const manualPhDo = attEntryFromSheet ? Number(attEntryFromSheet.phDo || 0) : 0;
+    const normalHours = Math.max(0, totalWork - manualOt - manualPhDo);
+    const ccPay = (employee.costCenter || "").trim().toUpperCase();
+    const hhsEligiblePay = ccPay === "H K" || ccPay === "HK" || ccPay === "POMEC";
+    const sickDaysForHhs = attEntryFromSheet
+      ? Number(attEntryFromSheet.sickDays ?? 0) || 0
+      : 0;
+    const hhsFormulaPay = calculateFormulaHhs(normalHours, sickDaysForHhs, hhsEligiblePay);
+    let hhs;
+    if (attEntryFromSheet != null) {
+      const raw = attEntryFromSheet.hhs;
+      if (raw != null && raw !== "" && Number.isFinite(Number(raw))) {
+        hhs = Number(raw);
+      } else {
+        hhs = hhsFormulaPay;
+      }
+    } else {
+      hhs = hhsFormulaPay;
+    }
+    const basicWage = Number(employee.basicWage || 0);
+    const housingRate = Number(employee.hAllow || 0);
+    const standardMetLeave = (basicWage + housingRate) * 0.25;
+    const standardAnnualLeaveDays = 15;
+    const calculatedConveyance = calculateConveyanceAllowanceForSpec(
+      logs,
+      dayValues,
+      shift,
+      basicWage,
+      normalHours
+    );
+
+    const syntheticEntry = {
+      costCenter:
+        attEntryFromSheet && String(attEntryFromSheet.costCenter || "").trim().length > 0
+          ? String(attEntryFromSheet.costCenter).trim()
+          : employee.costCenter || employee.department || "",
+      totalWork,
+      totalOvertime: manualOt,
+      phDo: manualPhDo,
+      phPay: 0,
+      arrears: attEntryFromSheet?.arrears ?? employee.arrears ?? 0,
+      compass: attEntryFromSheet?.compass ?? employee.compass ?? 0,
+      metLeave: attEntryFromSheet ? Number(attEntryFromSheet.metLeave || 0) : standardMetLeave,
+      annualLeave: attEntryFromSheet
+        ? Number(attEntryFromSheet.annualLeave || 0)
+        : standardAnnualLeaveDays,
+      sickDays: attEntryFromSheet ? Number(attEntryFromSheet.sickDays || 0) : 0,
+      hhs,
+      conveyanceAll: attEntryFromSheet
+        ? Number(attEntryFromSheet.conveyanceAll || 0)
+        : calculatedConveyance,
+      voluntaryNpf: attEntryFromSheet?.voluntaryNpf ?? employee.voluntaryNpf ?? 0,
+      rentAllowance: (() => {
+        const m = manualFortnight[employeeId]?.rentAllowance;
+        if (m != null && m !== "" && Number.isFinite(Number(m))) return Number(m);
+        return Number(attEntryFromSheet?.rentAllowance ?? employee.rentAllowance ?? 0);
+      })(),
+      otherDeductions: (() => {
+        const m = manualFortnight[employeeId]?.otherDeductions;
+        if (m != null && m !== "" && Number.isFinite(Number(m))) return Number(m);
+        return Number(employee.otherDeductions || 0);
+      })(),
+    };
+    rows.push(buildPayrollFromAttendanceEntry(employee, syntheticEntry));
+  });
+  return rows;
+};
+
 const saveAttendanceSheetToStorage = (fortnightValue, data) => {
   if (!fortnightValue || !data) return;
   try {
@@ -1279,6 +1956,8 @@ const saveAttendanceSheetToStorage = (fortnightValue, data) => {
     const all = raw ? JSON.parse(raw) : {};
     all[fortnightValue] = data;
     localStorage.setItem(attendanceSheetStorageKey, JSON.stringify(all));
+    invalidateReportPivotCache();
+    refreshDashboardPayrollIfVisible();
   } catch (error) {
     // ignore quota or parse errors
   }
@@ -1298,6 +1977,8 @@ const saveAttendanceSheetManualToServer = async (fortnightValue, data) => {
 };
 
 let attendanceSheetSaveTimeout = null;
+let payrollOtherDeductionSaveTimeout = null;
+let payrollRentReloadTimeout = null;
 let attendanceSheetCostCenterUpdating = false;
 let attendanceSheetDataCache = null;
 const debouncedSaveAttendanceSheet = () => {
@@ -1306,31 +1987,48 @@ const debouncedSaveAttendanceSheet = () => {
     attendanceSheetSaveTimeout = null;
     const value = attendanceSheetFortnight?.value || "";
     if (!value || !attendanceSheetTable) return;
+    const prevPeriod = loadAttendanceSheetFromStorage(value) || {};
     const data = {};
     attendanceSheetTable.querySelectorAll("tr[data-employee-id]")?.forEach((tr) => {
       const eid = tr.dataset.employeeId || "";
       if (!eid) return;
+      const prev = prevPeriod[eid] || {};
       const dayInputs = tr.querySelectorAll(".attendance-day-input");
       const dayValues = dayInputs ? Array.from(dayInputs).map((inp) => inp.value.trim() || "") : [];
       const otInput = tr.querySelector(".attendance-ot-input");
       const phDoInput = tr.querySelector(".attendance-phdo-input");
       const phPayInput = tr.querySelector(".attendance-phpay-input");
       const sickInput = tr.querySelector(".attendance-sick-input");
-      const compInput = tr.querySelector(".attendance-compassionate-input");
       const metInput = tr.querySelector(".attendance-metleave-input");
       const annInput = tr.querySelector(".attendance-annualleave-input");
       data[eid] = {
+        ...prev,
         dayValues,
         totalOvertime: otInput ? (parseFloat(otInput.value) || 0) : 0,
         phDo: phDoInput ? phDoInput.value.trim() : "",
         phPay: phPayInput ? (parseFloat(phPayInput.value) || 0) : 0,
         sickDays: sickInput ? sickInput.value.trim() : "",
-        compassionate: compInput ? compInput.value.trim() : "",
       metLeave: metInput ? (parseFloat(metInput.value) || 0) : 0,
       annualLeave: annInput ? (parseFloat(annInput.value) || 0) : 0,
     };
-    const convInput = tr.querySelector(".attendance-conveyance-input");
-    if (convInput) data[eid].conveyanceAll = parseFloat(convInput.value) || 0;
+    const tierSelects = tr.querySelectorAll(".attendance-conveyance-tier-select");
+    if (tierSelects.length === dayValues.length && dayValues.length > 0) {
+      const conveyanceDayTiers = Array.from(tierSelects).map((s) => clampConveyanceTier(s.value));
+      data[eid].conveyanceDayTiers = conveyanceDayTiers;
+      const convInput = tr.querySelector(".attendance-conveyance-input");
+      if (tr.dataset.conveyanceFixed === "1" && convInput) {
+        data[eid].conveyanceAll = parseFloat(convInput.value) || 0;
+        data[eid].conveyanceFixed = true;
+      } else {
+        data[eid].conveyanceAll = computeConveyanceFromDayTiersAndHours(
+          dayValues,
+          conveyanceDayTiers
+        );
+        delete data[eid].conveyanceFixed;
+      }
+    }
+    const hhsInput = tr.querySelector(".attendance-hhs-input");
+    if (hhsInput) data[eid].hhs = parseFloat(hhsInput.value) || 0;
     });
     if (Object.keys(data).length > 0) {
       saveAttendanceSheetToStorage(value, data);
@@ -1355,47 +2053,51 @@ const mergeProfiles = (employees, profiles) => {
   return merged;
 };
 
+const isNonEmptyField = (v) => v != null && String(v).trim() !== "";
+
+/**
+ * After device sync, only fill profile gaps from the server payload — never overwrite
+ * values already saved manually or merged from scripts/imports (localStorage wins).
+ */
 const saveProfilesFromDevice = (employees) => {
   const profiles = loadEmployeeProfiles();
   let changed = false;
   employees.forEach((employee) => {
     if (!employee?.employeeId) return;
+    const id = String(employee.employeeId);
     const existing = profiles[employee.employeeId] || {};
     const cached =
-      employeesCache.find(
-        (entry) => String(entry.employeeId) === String(employee.employeeId)
-      ) || {};
+      employeesCache.find((entry) => String(entry.employeeId) === id) || {};
     const next = { ...existing };
-    if (employee.costCenter && !existing.costCenter) {
-      next.costCenter = employee.costCenter;
-      changed = true;
-    }
-    if (employee.startDate && !existing.startDate) {
-      next.startDate = employee.startDate;
-      changed = true;
-    }
-    const constantNpf = employee.npf || existing.npf || cached.npf || "";
-    const constantBsp = employee.bsp || existing.bsp || cached.bsp || "";
-    const constantBasicWage =
-      employee.basicWage || existing.basicWage || cached.basicWage || "";
-    const constantHousingRate =
-      employee.hAllow || existing.hAllow || cached.hAllow || "";
-    if (constantNpf && next.npf !== constantNpf) {
-      next.npf = constantNpf;
-      changed = true;
-    }
-    if (constantBsp && next.bsp !== constantBsp) {
-      next.bsp = constantBsp;
-      changed = true;
-    }
-    if (constantBasicWage && next.basicWage !== constantBasicWage) {
-      next.basicWage = constantBasicWage;
-      changed = true;
-    }
-    if (constantHousingRate && next.hAllow !== constantHousingRate) {
-      next.hAllow = constantHousingRate;
-      changed = true;
-    }
+    const fillIfMissing = (key) => {
+      if (isNonEmptyField(next[key])) return;
+      if (isNonEmptyField(employee[key])) {
+        next[key] = employee[key];
+        changed = true;
+        return;
+      }
+      if (isNonEmptyField(cached[key])) {
+        next[key] = cached[key];
+        changed = true;
+      }
+    };
+    [
+      "names",
+      "costCenter",
+      "startDate",
+      "npf",
+      "bsp",
+      "basicWage",
+      "hAllow",
+      "basicSalary",
+      "shift",
+      "status",
+      "arrears",
+      "compass",
+      "voluntaryNpf",
+      "rentAllowance",
+      "otherDeductions",
+    ].forEach(fillIfMissing);
     profiles[employee.employeeId] = next;
   });
   if (changed) {
@@ -1449,14 +2151,18 @@ const getEmployeeByName = (name) => {
 };
 
 const getEmployeeNameById = (employeeId) => {
-  const match = employeesCache.find((emp) => emp.employeeId === employeeId);
+  const match = employeesCache.find(
+    (emp) => String(emp.employeeId ?? "") === String(employeeId ?? "")
+  );
   return match ? match.names : "";
 };
 
 const showEmployeeForm = (employeeId) => {
   if (!employeeForm) return;
   employeeForm.classList.remove("section-hidden");
-  const selected = employeesCache.find((emp) => emp.employeeId === employeeId);
+  const selected = employeesCache.find(
+    (emp) => String(emp.employeeId ?? "") === String(employeeId ?? "")
+  );
   if (selected) {
     populateEmployeeForm(selected);
   }
@@ -1484,71 +2190,94 @@ const updateAttendancePageInfo = (totalPages) => {
   attendancePageInfo.textContent = `Page ${attendancePage} of ${totalPages}`;
 };
 
-const getPayrollColumnFilters = () => {
-  const sel = (id) => (document.getElementById(id)?.value || "").trim();
-  return {
-    costCenter: payrollCostCenter?.value?.trim() || "",
-    taxable: sel("filterTaxable"),
-    arrears: sel("filterArrears"),
-    compass: sel("filterCompass"),
-    metLeave: sel("filterMetLeave"),
-    annualLeave: sel("filterAnnualLeave"),
-    totalEarning: sel("filterTotalEarning"),
-    npf5: sel("filterNpf5"),
-    npf75: sel("filterNpf75"),
-    voluntaryNpf: sel("filterVoluntaryNpf"),
-    paye: sel("filterPaye"),
-    basic1: sel("filterBasic1"),
-    otherDedu: sel("filterOtherDedu"),
-    salaryForRo: sel("filterSalaryForRo"),
-  };
+const parsePayrollCellNum = (v) => {
+  const n = parseFloat(String(v ?? "").replace(/,/g, ""));
+  return Number.isFinite(n) ? n : 0;
 };
 
-const applyPayrollFilters = (logs, filters) => {
-  if (!logs || logs.length === 0) return logs;
-  const matchValue = (val, filter) => {
-    if (!filter || filter === "") return true;
-    const n = parseFloat(val);
-    const num = Number.isNaN(n) ? 0 : n;
-    if (filter === "nonzero") return num > 0;
-    if (filter === "zero") return num === 0;
-    return true;
-  };
-  return logs.filter((log) => {
-    if (filters.costCenter) {
-      const cc = (log.costCenter || "").trim() || "(blank)";
-      if (cc !== filters.costCenter) return false;
-    }
-    if (!matchValue(log.taxableE, filters.taxable)) return false;
-    if (!matchValue(log.arrears, filters.arrears)) return false;
-    if (!matchValue(log.compassOf, filters.compass)) return false;
-    if (!matchValue(log.metLeave, filters.metLeave)) return false;
-    if (!matchValue(log.annual, filters.annualLeave)) return false;
-    if (!matchValue(log.totalEa, filters.totalEarning)) return false;
-    if (!matchValue(log.npf5, filters.npf5)) return false;
-    if (!matchValue(log.npf75, filters.npf75)) return false;
-    if (!matchValue(log.voluntaryN, filters.voluntaryNpf)) return false;
-    if (!matchValue(log.payeA, filters.paye)) return false;
-    if (!matchValue(log.basic1, filters.basic1)) return false;
-    if (!matchValue(log.otherDedu, filters.otherDedu)) return false;
-    if (!matchValue(log.salaryForRo, filters.salaryForRo)) return false;
-    return true;
+const buildPayrollTotalsFooterRow = (logs) => {
+  const fmt = (n) => (Number(n) || 0).toFixed(2);
+  const rowsByEid = new Map();
+  attendanceTable?.querySelectorAll("tr[data-employee-id]").forEach((tr) => {
+    rowsByEid.set(String(tr.dataset.employeeId || "").trim(), tr);
   });
+  const numFromRowInput = (log, selector, fallback) => {
+    const tr = rowsByEid.get(String(log.employeeId || "").trim());
+    if (tr) {
+      const inp = tr.querySelector(selector);
+      if (inp) return parsePayrollCellNum(inp.value);
+    }
+    return parsePayrollCellNum(fallback);
+  };
+  const salaryForPeriodForLog = (log) => {
+    const tr = rowsByEid.get(String(log.employeeId || "").trim());
+    const totalEa = parsePayrollCellNum(log.totalEa);
+    const vnPct = tr
+      ? parsePayrollCellNum(tr.querySelector(".payroll-voluntarynpf-input")?.value)
+      : parsePayrollCellNum(log.voluntaryNpfPct);
+    const basicSalary = parsePayrollCellNum(log.basicSalary);
+    const otherDedu = numFromRowInput(log, ".payroll-otherdedu-input", log.otherDedu);
+    return computeSalaryForPeriod({
+      totalEa,
+      basicSalary,
+      voluntaryNpfPct: vnPct,
+      payeA: parsePayrollCellNum(log.payeA),
+      otherDeductions: otherDedu,
+    });
+  };
+  const sum = (getter) => logs.reduce((s, log) => s + parsePayrollCellNum(getter(log)), 0);
+  const sumRent = () =>
+    logs.reduce((s, log) => s + numFromRowInput(log, ".payroll-rent-input", log.rentA), 0);
+  const sumOtherDedu = () =>
+    logs.reduce((s, log) => s + numFromRowInput(log, ".payroll-otherdedu-input", log.otherDedu), 0);
+  const sumVoluntaryN = () =>
+    logs.reduce((s, log) => {
+      const tr = rowsByEid.get(String(log.employeeId || "").trim());
+      if (tr) {
+        const vnInp = tr.querySelector(".payroll-voluntarynpf-input");
+        if (vnInp) {
+          const pct = parsePayrollCellNum(vnInp.value);
+          const totalEa = parsePayrollCellNum(log.totalEa);
+          return s + voluntaryNpfAmountFromPercent(totalEa, pct);
+        }
+      }
+      return s + parsePayrollCellNum(log.voluntaryN);
+    }, 0);
+  const sumSalaryFor = () => logs.reduce((s, log) => s + salaryForPeriodForLog(log), 0);
+  return `
+    <tr class="payroll-totals-row">
+      <td colspan="5" class="payroll-totals-label">Total</td>
+      <td>${fmt(sum((log) => log.basicWage))}</td>
+      <td>${fmt(sum((log) => log.housingAll))}</td>
+      <td>${fmt(sum((log) => log.basicSalary))}</td>
+      <td>${fmt(sum((log) => log.overTimeS))}</td>
+      <td>${fmt(sum((log) => log.public))}</td>
+      <td>${fmt(sum((log) => log.housingA))}</td>
+      <td>${fmt(sumRent())}</td>
+      <td>${fmt(sum((log) => log.taxableE))}</td>
+      <td>${fmt(sum((log) => log.arrears))}</td>
+      <td>${fmt(sum((log) => log.metLeave))}</td>
+      <td>${fmt(sum((log) => log.annual))}</td>
+      <td>${fmt(sum((log) => log.totalEa))}</td>
+      <td>${fmt(sum((log) => log.npf5))}</td>
+      <td>${fmt(sum((log) => log.npf75))}</td>
+      <td title="Sum of voluntary NPF amounts (not percentages)">${fmt(sumVoluntaryN())}</td>
+      <td>${fmt(sum((log) => log.payeA))}</td>
+      <td>${fmt(sum((log) => log.basic1))}</td>
+      <td>${fmt(sumOtherDedu())}</td>
+      <td>${fmt(sumSalaryFor())}</td>
+    </tr>
+  `;
 };
 
-const renderAttendanceTable = () => {
-  if (!attendanceTable) return;
-  if (!attendanceLogs || attendanceLogs.length === 0) {
-    biometricMessage.textContent = "No attendance logs returned from device.";
-    attendanceTable.innerHTML = "";
-    return;
-  }
-  const filters = getPayrollColumnFilters();
-  const filteredLogs = applyPayrollFilters(attendanceLogs, filters);
-  populateCostCenterFilter(payrollCostCenter, filters.costCenter);
-  const totalPages = Math.max(1, attendanceTotalPages);
-  attendancePage = Math.min(attendancePage, totalPages);
-  const visibleLogs = [...filteredLogs].sort((a, b) => {
+const refreshPayrollTotalsFooter = () => {
+  if (!attendanceTableFoot || !attendanceLogs?.length) return;
+  attendanceTableFoot.innerHTML = buildPayrollTotalsFooterRow(attendanceLogs);
+  attendanceTableFoot.hidden = false;
+};
+
+const sortPayrollLogsForDisplay = (logs) =>
+  [...logs].sort((a, b) => {
     const aId = String(a.employeeId || "").trim();
     const bId = String(b.employeeId || "").trim();
     const aNum = Number(aId);
@@ -1560,17 +2289,114 @@ const renderAttendanceTable = () => {
     }
     return aId.localeCompare(bId, undefined, { numeric: true, sensitivity: "base" });
   });
+
+const renderBankAdviceLoadLog = () => {
+  if (!bankAdviceLoadLog || !bankAdviceLoadLogEmpty) return;
+  if (bankAdviceSection?.classList.contains("section-hidden")) return;
+  if (bankAdviceLoadLogEntries.length === 0) {
+    bankAdviceLoadLog.innerHTML = "";
+    bankAdviceLoadLogEmpty.hidden = false;
+    return;
+  }
+  bankAdviceLoadLogEmpty.hidden = true;
+  bankAdviceLoadLog.innerHTML = bankAdviceLoadLogEntries
+    .map(
+      (e) =>
+        `<li>${escapeHtml(e.time)} — ${escapeHtml(e.label)} — ${e.rowCount} employee(s)</li>`
+    )
+    .join("");
+};
+
+const appendBankAdviceLoadLog = (periodLabel, rowCount) => {
+  const time = new Date().toLocaleString();
+  const entry = { time, label: periodLabel, rowCount };
+  bankAdviceLoadLogEntries.unshift(entry);
+  if (bankAdviceLoadLogEntries.length > BANK_ADVICE_LOAD_LOG_MAX) {
+    bankAdviceLoadLogEntries.length = BANK_ADVICE_LOAD_LOG_MAX;
+  }
+  renderBankAdviceLoadLog();
+};
+
+const renderBankAdviceTable = () => {
+  if (!bankAdviceTable) return;
+  if (bankAdviceSection?.classList.contains("section-hidden")) return;
+  const label = getBankAdviceFortnightLabelText();
+  if (bankAdvicePeriod) {
+    bankAdvicePeriod.textContent = label
+      ? `Fortnight period: ${label}`
+      : "Select a fortnight and click Load Logs.";
+  }
+  if (!attendanceLogs?.length) {
+    bankAdviceTable.innerHTML = "";
+    return;
+  }
+  const sorted = sortPayrollLogsForDisplay(attendanceLogs);
+  const toValue = (value) => (value === 0 || value ? String(value) : "");
+  bankAdviceTable.innerHTML = sorted
+    .map(
+      (log) => `
+      <tr>
+        <td>${toValue(log.employeeId)}</td>
+        <td>${toValue(log.employeeName)}</td>
+        <td>${toValue(log.bspAccount)}</td>
+        <td>${toValue(log.salaryFor)}</td>
+      </tr>`
+    )
+    .join("");
+};
+
+const downloadBankAdviceExcel = () => {
+  if (typeof XLSX === "undefined") {
+    alert("Excel library not loaded. Please refresh the page.");
+    return;
+  }
+  if (!attendanceLogs?.length) {
+    alert("No payroll data. Select a fortnight and click Load Logs.");
+    return;
+  }
+  const period = getBankAdviceFortnightLabelText() || "fortnight";
+  const sorted = sortPayrollLogsForDisplay(attendanceLogs);
+  const wsData = [
+    [`Fortnight period: ${period}`],
+    [],
+    ["Employee Id", "Employee Name", "BSP Account", "Salary for Period"],
+    ...sorted.map((log) => [
+      log.employeeId ?? "",
+      log.employeeName ?? "",
+      log.bspAccount ?? "",
+      log.salaryFor ?? "",
+    ]),
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Bank Advice");
+  const safe = period.replace(/\s+/g, "_").replace(/[/\\?%*:|"<>]/g, "-");
+  XLSX.writeFile(wb, `Bank_Advice_${safe}.xlsx`);
+};
+
+const renderAttendanceTable = () => {
+  if (!attendanceTable) return;
+  if (!attendanceLogs || attendanceLogs.length === 0) {
+    if (biometricMessage) biometricMessage.textContent = "No payroll data. Sync employees and Load Logs.";
+    attendanceTable.innerHTML = "";
+    if (attendanceTableFoot) {
+      attendanceTableFoot.innerHTML = "";
+      attendanceTableFoot.hidden = true;
+    }
+    renderBankAdviceTable();
+    return;
+  }
+  const totalPages = Math.max(1, attendanceTotalPages);
+  attendancePage = Math.min(attendancePage, totalPages);
+  const visibleLogs = sortPayrollLogsForDisplay(attendanceLogs);
   attendanceTable.innerHTML = "";
   visibleLogs.forEach((log) => {
     const toValue = (value) => (value === 0 || value ? String(value) : "");
+    const vnPctDisplay = getVoluntaryNpfPctForDisplay(log);
     const row = document.createElement("tr");
     row.dataset.employeeId = toValue(log.employeeId);
     row.innerHTML = `
       <td>${toValue(log.employeeId)}</td>
-      <td>
-        <button type="button" class="attendance-download-excel">Excel</button>
-        <button type="button" class="attendance-download-pdf">PDF</button>
-      </td>
       <td>${toValue(log.employeeName)}</td>
       <td>${toValue(log.costCenter)}</td>
       <td>${toValue(log.npfNumber)}</td>
@@ -1581,24 +2407,25 @@ const renderAttendanceTable = () => {
       <td>${toValue(log.overTimeS)}</td>
       <td>${toValue(log.public)}</td>
       <td>${toValue(log.housingA)}</td>
+      <td><input type="number" class="payroll-rent-input" data-employee-id="${toValue(log.employeeId)}" value="${toValue(log.rentA)}" placeholder="0" min="0" step="0.01" size="6" title="Rent allowance (manual; included in taxable earning; saved per fortnight)" /></td>
       <td>${toValue(log.taxableE)}</td>
       <td>${toValue(log.arrears)}</td>
-      <td>${toValue(log.compassOf)}</td>
       <td>${toValue(log.metLeave)}</td>
       <td>${toValue(log.annual)}</td>
       <td>${toValue(log.totalEa)}</td>
       <td>${toValue(log.npf5)}</td>
       <td>${toValue(log.npf75)}</td>
-      <td><input type="number" class="payroll-voluntarynpf-input" data-employee-id="${toValue(log.employeeId)}" value="${toValue(log.voluntaryN)}" placeholder="0" min="0" step="0.01" size="6" title="Voluntary NPF" /></td>
+      <td><input type="number" class="payroll-voluntarynpf-input" data-employee-id="${toValue(log.employeeId)}" value="${vnPctDisplay === 0 ? "" : vnPctDisplay}" placeholder="0" min="0" max="100" step="0.01" size="6" title="Voluntary NPF: enter % of total earning (e.g. 5 = 5%). Amount = total earning × % ÷ 100." /></td>
       <td>${toValue(log.payeA)}</td>
       <td>${toValue(log.basic1)}</td>
-      <td>${toValue(log.otherDedu)}</td>
+      <td><input type="number" class="payroll-otherdedu-input" data-employee-id="${toValue(log.employeeId)}" value="${toValue(log.otherDedu)}" placeholder="0" min="0" step="0.01" size="6" title="Other deductions (manual; saved per fortnight)" /></td>
       <td class="payroll-salaryfor-cell">${toValue(log.salaryFor)}</td>
-      <td class="payroll-salaryforro-cell">${toValue(log.salaryForRo)}</td>
     `;
     attendanceTable.appendChild(row);
   });
+  refreshPayrollTotalsFooter();
   updateAttendancePageInfo(totalPages);
+  renderBankAdviceTable();
 };
 
 const parseLogTimestamp = (log) => {
@@ -1746,6 +2573,8 @@ const saveEmployeeProfile = () => {
   updateRosterEmployeeList(employeesCache);
   renderEmployeeTable(employeesCache);
   updateDashboardStats(employeesCache);
+  invalidateReportPivotCache();
+  refreshDashboardPayrollIfVisible();
   biometricMessage.textContent = "Employee saved.";
 };
 
@@ -2000,26 +2829,32 @@ const buildPayrollMetrics = (employee, logs, overrides) => {
   const costCenter = (employee.costCenter || "").toUpperCase();
   const hhsEligible =
     costCenter === "H K" || costCenter === "HK" || costCenter === "POMEC";
-  const hhsAllowance = hhsEligible ? 0.5 * totalHours : 0;
+  const sickDaysForHhs = Number(overrides.sickDays ?? 0) || 0;
+  const hhsAllowance = calculateFormulaHhs(totalHours, sickDaysForHhs, hhsEligible);
   const conveyanceAllowance = calculateConveyanceAllowance(logs, summaries, rate);
   const arrears = Number(overrides.arrears || 0);
   const compass = Number(overrides.compass || 0);
+  const rentAllowance = Number(overrides.rentAllowance ?? employee.rentAllowance ?? 0) || 0;
   const taxableEarning =
     basePay +
     otPay +
     phPay +
     housingAllowance +
+    rentAllowance +
     arrears +
     compass +
     metLeave +
     hhsAllowance +
     conveyanceAllowance;
-  const annualLeaveAmount = (rate + housingRate) * 15;
+  const annualLeaveDays = Number(overrides?.annualLeaveDays ?? 15) || 0;
+  const annualLeaveAmount =
+    ANNUAL_LEAVE_HOURS_PER_UNIT * (rate + housingRate) * annualLeaveDays;
   const totalEarning = taxableEarning + annualLeaveAmount;
   const npf5 = totalEarning * 0.05;
   const npf75 = totalEarning * 0.075;
   const basicRate1 = basePay * 0.01;
-  const voluntaryNpf = Number(overrides.voluntaryNpf || 0);
+  const voluntaryNpfPct = Number(overrides.voluntaryNpf ?? employee.voluntaryNpf ?? 0) || 0;
+  const voluntaryNpf = voluntaryNpfAmountFromPercent(totalEarning, voluntaryNpfPct);
   const otherDeductions = Number(overrides.otherDeductions || 0);
   const annualized = totalEarning * 26;
   let payeA = 0;
@@ -2035,14 +2870,13 @@ const buildPayrollMetrics = (employee, logs, overrides) => {
     payeA =
       (annualized - 30080 - 60000) * 0.4 / 26 + 63.46 + 132.69 + 403.85;
   }
-  const salaryForPeriod =
-    totalEarning -
-    npf5 -
-    npf75 -
-    voluntaryNpf -
-    payeA -
-    basicRate1 -
-    otherDeductions;
+  const salaryForPeriod = computeSalaryForPeriod({
+    totalEa: totalEarning,
+    basicSalary: basePay,
+    voluntaryNpfPct,
+    payeA,
+    otherDeductions,
+  });
 
   return {
     latestDate: latest ? latest.date : "",
@@ -2055,6 +2889,7 @@ const buildPayrollMetrics = (employee, logs, overrides) => {
     phPay,
     housingRate,
     housingAllowance,
+    rentAllowance,
     metLeave,
     hhsAllowance,
     conveyanceAllowance,
@@ -2067,6 +2902,7 @@ const buildPayrollMetrics = (employee, logs, overrides) => {
     npf75,
     basicRate1,
     voluntaryNpf,
+    voluntaryNpfPct,
     otherDeductions,
     payeA,
     salaryForPeriod,
@@ -2074,15 +2910,28 @@ const buildPayrollMetrics = (employee, logs, overrides) => {
 };
 
 const getSelectedFortnightLabel = () => {
-  if (!payrollFortnight) return "";
-  const selected = payrollFortnight.options[payrollFortnight.selectedIndex];
+  const sel = payrollFortnight || attendanceFortnight;
+  if (!sel) return "";
+  const selected = sel.options[sel.selectedIndex];
   return selected ? selected.textContent.trim() : "";
+};
+
+const getBankAdviceFortnightLabelText = () => {
+  if (bankAdviceFortnight?.value) {
+    const opt = bankAdviceFortnight.options[bankAdviceFortnight.selectedIndex];
+    return opt ? opt.textContent.trim() : "";
+  }
+  return getSelectedFortnightLabel();
 };
 
 const setPayslipValue = (element, value) => {
   if (!element) return;
   element.textContent = value;
 };
+
+/** Payslip PDF/CSV: rent allowance is rolled into housing (no separate rent line). */
+const payslipHousingWithRent = (metrics) =>
+  (Number(metrics?.housingAllowance) || 0) + (Number(metrics?.rentAllowance) || 0);
 
 const buildPayslipLines = (employee, metrics) => [
   ["Heritage Park Hotel Limited", ""],
@@ -2100,23 +2949,29 @@ const buildPayslipLines = (employee, metrics) => [
   ["OT Hours", metrics.otHours ? metrics.otHours.toFixed(2) : "0.00"],
   ["OT Salary", metrics.otPay ? metrics.otPay.toFixed(2) : "0.00"],
   ["PH x 2", metrics.phPay ? metrics.phPay.toFixed(2) : "0.00"],
-  ["Housing Allowance", metrics.housingAllowance ? metrics.housingAllowance.toFixed(2) : "0.00"],
+  ["Housing Allowance", payslipHousingWithRent(metrics).toFixed(2)],
   ["MET (Maternity Leave)", metrics.metLeave ? metrics.metLeave.toFixed(2) : "0.00"],
   ["HHS", metrics.hhsAllowance ? metrics.hhsAllowance.toFixed(2) : "0.00"],
   ["Conveyance Allowance", metrics.conveyanceAllowance ? metrics.conveyanceAllowance.toFixed(2) : "0.00"],
   ["Arrears", metrics.arrears ? Number(metrics.arrears).toFixed(2) : "0.00"],
-  ["Compass / Officiate", metrics.compass ? Number(metrics.compass).toFixed(2) : "0.00"],
   ["Taxable Earning", metrics.taxableEarning ? metrics.taxableEarning.toFixed(2) : "0.00"],
   ["Annual Leave", metrics.annualLeaveAmount ? metrics.annualLeaveAmount.toFixed(2) : "0.00"],
   ["Total Earning", metrics.totalEarning ? metrics.totalEarning.toFixed(2) : "0.00"],
   ["NPF 5%", metrics.npf5 ? metrics.npf5.toFixed(2) : "0.00"],
   ["NPF 7.5%", metrics.npf75 ? metrics.npf75.toFixed(2) : "0.00"],
-  ["Voluntary NPF", metrics.voluntaryNpf ? Number(metrics.voluntaryNpf).toFixed(2) : "0.00"],
+  [
+    "Voluntary NPF",
+    metrics.voluntaryNpf
+      ? Number(metrics.voluntaryNpf).toFixed(2) +
+        (metrics.voluntaryNpfPct != null && Number(metrics.voluntaryNpfPct) > 0
+          ? ` (${Number(metrics.voluntaryNpfPct).toFixed(2)}% of total earning)`
+          : "")
+      : "0.00",
+  ],
   ["PAYE $ (A)", metrics.payeA ? metrics.payeA.toFixed(2) : "0.00"],
   ["Basic Rate 1%", metrics.basicRate1 ? metrics.basicRate1.toFixed(2) : "0.00"],
   ["Other Deductions", metrics.otherDeductions ? Number(metrics.otherDeductions).toFixed(2) : "0.00"],
   ["Salary for the Period", Number.isFinite(metrics.salaryForPeriod) ? metrics.salaryForPeriod.toFixed(2) : "0.00"],
-  ["Salary for the Period RO", Number.isFinite(metrics.salaryForPeriod) ? Math.round(metrics.salaryForPeriod).toFixed(2) : "0.00"],
 ];
 
 const updatePayrollPreview = async () => {
@@ -2131,14 +2986,26 @@ const updatePayrollPreview = async () => {
       payrollHousingAllowanceRateInput.value = selected.hAllow;
     }
   }
+  const voluntaryNpfOverride =
+    payrollVoluntaryNpfInput?.value?.trim() !== ""
+      ? payrollVoluntaryNpfInput.value
+      : selected.voluntaryNpf ?? "";
+  const rentAllowance = await resolveRentAllowanceForFortnight(selected, selected.rentAllowance);
   const metrics = buildPayrollMetrics(selected, logs, {
     publicHoliday: payrollPublicHoliday?.value === "yes",
     housingRate: payrollHousingAllowanceRateInput?.value,
     arrears: payrollArrearsInput?.value,
     compass: payrollCompassInput?.value,
-    voluntaryNpf: payrollVoluntaryNpfInput?.value,
+    voluntaryNpf: voluntaryNpfOverride,
+    rentAllowance,
     otherDeductions: payrollOtherDeductionsInput?.value,
   });
+  if (payrollVoluntaryNpfInput) {
+    payrollVoluntaryNpfInput.value =
+      voluntaryNpfOverride !== "" && voluntaryNpfOverride != null
+        ? String(voluntaryNpfOverride)
+        : "";
+  }
   payrollEmployeeId.value = selected.employeeId || "";
   payrollAttendanceDate.value = metrics.latestDate || "";
   payrollWorkedHours.value = Number.isFinite(metrics.totalHours)
@@ -2224,11 +3091,6 @@ const updatePayrollPreview = async () => {
     payrollSalaryPeriodInput.value = Number.isFinite(metrics.salaryForPeriod)
       ? metrics.salaryForPeriod.toFixed(2)
       : "0.00";
-    if (payrollSalaryPeriodRoInput) {
-      payrollSalaryPeriodRoInput.value = Number.isFinite(metrics.salaryForPeriod)
-        ? Math.round(metrics.salaryForPeriod).toFixed(2)
-        : "0.00";
-    }
   }
 
   setPayslipValue(payslipEmployeeName, selected.names || "");
@@ -2269,8 +3131,9 @@ const updatePayrollPreview = async () => {
   );
   setPayslipValue(
     payslipHousingAllowance,
-    metrics.housingAllowance ? metrics.housingAllowance.toFixed(2) : "0.00"
+    payslipHousingWithRent(metrics).toFixed(2)
   );
+  setPayslipValue(payslipRentAllowance, "");
   setPayslipValue(
     payslipMetLeave,
     metrics.metLeave ? metrics.metLeave.toFixed(2) : "0.00"
@@ -2331,12 +3194,6 @@ const updatePayrollPreview = async () => {
     payslipSalaryPeriod,
     Number.isFinite(metrics.salaryForPeriod)
       ? metrics.salaryForPeriod.toFixed(2)
-      : "0.00"
-  );
-  setPayslipValue(
-    payslipSalaryPeriodRo,
-    Number.isFinite(metrics.salaryForPeriod)
-      ? Math.round(metrics.salaryForPeriod).toFixed(2)
       : "0.00"
   );
 };
@@ -2483,6 +3340,331 @@ const buildPdfWithLogo = async (lines) => {
   return doc.output("blob");
 };
 
+const metricsFromPayrollLog = (log, employee) => {
+  const n = (v) => parseFloat(String(v).replace(/,/g, "")) || 0;
+  const rate = n(log.basicWage) || Number(employee.basicWage || 0);
+  const basePay = n(log.basicSalary);
+  const otPay = n(log.overTimeS);
+  const phPay = n(log.public);
+  const housingAllowance = n(log.housingA);
+  const rentAllowance = n(log.rentA);
+  const housingRate = n(log.housingAll) || Number(employee.hAllow || 0);
+  const arrears = n(log.arrears);
+  const compass = n(log.compassOf);
+  const metLeave = n(log.metLeave);
+  const hhsAllowance = n(log.hhs);
+  const annualLeaveAmount = n(log.annual);
+  const conveyanceAllowance = n(log.conveyance);
+  const totalEarning = n(log.totalEa);
+  const taxableEarning = n(log.taxableE);
+  const normalHours = rate > 0 ? basePay / rate : 0;
+  const otHours = rate > 0 ? otPay / (rate * 1.5) : 0;
+  const totalHours = normalHours + otHours;
+  const npf5 = totalEarning * 0.05;
+  const npf75 = totalEarning * 0.075;
+  const basicRate1 = basePay * 0.01;
+  const voluntaryNpfPct = n(log.voluntaryNpfPct);
+  const voluntaryNpf = voluntaryNpfAmountFromPercent(totalEarning, voluntaryNpfPct);
+  const salaryForPeriod = computeSalaryForPeriod({
+    totalEa: totalEarning,
+    basicSalary: basePay,
+    voluntaryNpfPct,
+    payeA: n(log.payeA),
+    otherDeductions: n(log.otherDedu),
+  });
+  return {
+    rate,
+    basePay,
+    otHours,
+    otPay,
+    phPay,
+    totalHours,
+    housingRate,
+    housingAllowance,
+    rentAllowance,
+    arrears,
+    compass,
+    metLeave,
+    hhsAllowance,
+    annualLeaveAmount,
+    conveyanceAllowance,
+    taxableEarning,
+    totalEarning,
+    npf5,
+    npf75,
+    voluntaryNpf,
+    payeA: n(log.payeA),
+    basicRate1,
+    otherDeductions: n(log.otherDedu),
+    sickDaysDed: n(log.sickDaysDed),
+    compassionateDed: n(log.compassionateDed),
+    metLeaveDed: n(log.metLeaveDed),
+    annualLeaveDed: n(log.annualLeaveDed),
+    salaryForPeriod,
+  };
+};
+
+const addPayslipPageToDoc = (doc, employee, metrics, logoData, logoAspect, opts = {}) => {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const offsetX = opts.offsetX ?? 0;
+  const columnWidth = opts.columnWidth ?? (pageWidth - 90);
+  const isTwoPerPage = opts.columnWidth != null;
+
+  const marginLeft = isTwoPerPage ? 12 : 45;
+  const marginRight = isTwoPerPage ? 12 : 45;
+  const contentWidth = columnWidth - marginLeft - marginRight;
+  const lineHeight = isTwoPerPage ? 8 : 11;
+  const logoMaxWidth = isTwoPerPage ? 45 : 70;
+  const logoTopMargin = isTwoPerPage ? 10 : 18;
+  const sectionGap = isTwoPerPage ? 8 : 14;
+  const rowH = isTwoPerPage ? 9 : 13;
+
+  const DARK_BLUE = [30, 58, 95];
+  const LIGHT_BLUE = [179, 217, 242];
+
+  if (!isTwoPerPage) {
+    doc.setFillColor(...DARK_BLUE);
+    doc.rect(0, 0, 28, 40, "F");
+    doc.setFillColor(...LIGHT_BLUE);
+    doc.rect(6, 6, 24, 34, "F");
+    doc.setFillColor(...DARK_BLUE);
+    doc.rect(pageWidth - 32, pageHeight - 45, 32, 45, "F");
+    doc.setFillColor(...LIGHT_BLUE);
+    doc.rect(pageWidth - 26, pageHeight - 38, 26, 38, "F");
+  }
+
+  const centerX = offsetX + columnWidth / 2;
+  const baseX = offsetX + marginLeft;
+
+  let logoHeight = 0;
+  if (logoData && logoAspect && logoAspect > 0) {
+    const logoW = logoMaxWidth;
+    logoHeight = logoW / logoAspect;
+    const logoX = centerX - logoW / 2;
+    doc.addImage(logoData, "PNG", logoX, logoTopMargin, logoW, logoHeight);
+  }
+
+  let y = logoTopMargin + logoHeight + (isTwoPerPage ? 14 : 22);
+  doc.setFontSize(isTwoPerPage ? 7 : 9);
+  doc.setTextColor(...DARK_BLUE);
+  doc.setFont("helvetica", "bold");
+  doc.text("HERITAGE PARK", centerX, y, { align: "center" });
+  y += isTwoPerPage ? 6 : 10;
+  doc.setFontSize(isTwoPerPage ? 7 : 9);
+  doc.text("HOTEL", centerX, y, { align: "center" });
+  y += isTwoPerPage ? 6 : 10;
+  doc.setFontSize(6);
+  doc.setFont("helvetica", "normal");
+  doc.text("HONIARA", centerX, y, { align: "center" });
+  y += isTwoPerPage ? 12 : 18;
+  doc.setFontSize(6);
+  doc.setTextColor(80, 80, 80);
+  doc.text("P.O. BOX 1598, MENDANA AVENUE, HONIARA, SOLOMON ISLANDS", centerX, y, { align: "center" });
+  y += sectionGap + (isTwoPerPage ? 8 : 12);
+
+  doc.setFontSize(isTwoPerPage ? 10 : 12);
+  doc.setTextColor(...DARK_BLUE);
+  doc.setFont("helvetica", "bold");
+  doc.text("PAYSLIP", centerX, y, { align: "center" });
+  y += isTwoPerPage ? 10 : 14;
+  const fortnightPeriod = opts.fortnightPeriod || "";
+  if (fortnightPeriod) {
+    doc.setFontSize(isTwoPerPage ? 7 : 9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(60, 60, 60);
+    doc.text(fortnightPeriod, centerX, y, { align: "center" });
+    y += isTwoPerPage ? 8 : 10;
+  }
+  doc.setDrawColor(...DARK_BLUE);
+  doc.setLineWidth(0.5);
+  doc.line(baseX, y, baseX + contentWidth, y);
+  y += sectionGap;
+
+  doc.setFontSize(isTwoPerPage ? 6 : 8);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(0, 0, 0);
+  const empDetails = [
+    ["EMPLOYEE NAME", (employee.names || "").toUpperCase()],
+    ["EMPLOYEE ID", String(employee.employeeId || "")],
+    ["COMMENCEMENT DATE", formatDateForDisplay(employee.startDate || "").toUpperCase()],
+    ["COST CENTER", (employee.costCenter || employee.department || "").toUpperCase()],
+    ["NPF NUMBER", (employee.npf || "").toUpperCase()],
+    ["BSP ACCOUNT", String(employee.bsp || "")],
+  ];
+  doc.setFont("helvetica", "bold");
+  const labelValueGap = 12 * doc.getTextWidth(" ");
+  const maxLabelW = Math.max(...empDetails.map(([l]) => doc.getTextWidth(l + ": ")));
+  const valueStartX = baseX + maxLabelW + labelValueGap;
+  for (const [label, value] of empDetails) {
+    doc.setFont("helvetica", "bold");
+    doc.text(label + ":", baseX, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(value, valueStartX, y);
+    y += lineHeight;
+  }
+  y += sectionGap;
+
+  const col1W = contentWidth * 0.72;
+  const col2W = contentWidth * 0.28;
+  const fmt = (v) => (v != null && Number.isFinite(v) ? Number(v).toFixed(2) : "0.00");
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(isTwoPerPage ? 7 : 9);
+  doc.setTextColor(...DARK_BLUE);
+  doc.text("Earnings", baseX, y);
+  y += isTwoPerPage ? 6 : 8;
+
+  const earningsRows = [
+    ["Basic wage per hour", fmt(metrics.rate)],
+    ["Basic Salary", fmt(metrics.basePay)],
+    ["OT Hours", fmt(metrics.otHours)],
+    ["OT Salary", fmt(metrics.otPay)],
+    ["Public Holiday Salary", fmt(metrics.phPay)],
+    ["Total hours", fmt(metrics.totalHours)],
+    ["Housing Allowance per hour", fmt(metrics.housingRate)],
+    ["Housing Allowance", fmt(payslipHousingWithRent(metrics))],
+    ["Arrears", fmt(metrics.arrears)],
+    ["MET (Maternity Leave)", fmt(metrics.metLeave)],
+    ["HHS", fmt(metrics.hhsAllowance)],
+    ["Conveyance Allowance", fmt(metrics.conveyanceAllowance)],
+    ["Annual Leave", fmt(metrics.annualLeaveAmount)],
+    ["Taxable Earning", fmt(metrics.taxableEarning)],
+    ["Total Earnings", fmt(metrics.totalEarning)],
+  ];
+
+  doc.setFillColor(...LIGHT_BLUE);
+  doc.rect(baseX, y, col1W, rowH, "F");
+  doc.rect(baseX + col1W, y, col2W, rowH, "F");
+  doc.setTextColor(...DARK_BLUE);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(isTwoPerPage ? 6 : 8);
+  doc.text("Description", baseX + 4, y + (isTwoPerPage ? 6 : 9));
+  doc.text("Amount", baseX + col1W + 4, y + (isTwoPerPage ? 6 : 9));
+  y += rowH;
+
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(0, 0, 0);
+  doc.setFontSize(isTwoPerPage ? 6 : 8);
+  for (const [desc, amt] of earningsRows) {
+    doc.text(desc, baseX + 4, y + (isTwoPerPage ? 6 : 9));
+    doc.text(amt, baseX + col1W + 4, y + (isTwoPerPage ? 6 : 9));
+    doc.setDrawColor(220, 220, 220);
+    doc.line(baseX, y + rowH, baseX + contentWidth, y + rowH);
+    y += rowH;
+  }
+  y += sectionGap;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(isTwoPerPage ? 7 : 9);
+  doc.setTextColor(...DARK_BLUE);
+  doc.text("Deductions", baseX, y);
+  y += isTwoPerPage ? 6 : 8;
+
+  const deductionsRows = [
+    ["NPF 5%", fmt(metrics.npf5)],
+    ["NPF 7.5%", fmt(metrics.npf75)],
+    ["Voluntary NPF", fmt(metrics.voluntaryNpf)],
+    ["PAYE $ (A)", fmt(metrics.payeA)],
+    ["Basic Rate 1%", fmt(metrics.basicRate1)],
+    ["Sick Days", fmt(metrics.sickDaysDed)],
+    ["MET Leave", fmt(metrics.metLeaveDed)],
+    ["Annual Leave", fmt(metrics.annualLeaveDed)],
+    ["Other Deductions", fmt(metrics.otherDeductions)],
+  ];
+
+  doc.setFillColor(...LIGHT_BLUE);
+  doc.rect(baseX, y, col1W, rowH, "F");
+  doc.rect(baseX + col1W, y, col2W, rowH, "F");
+  doc.setFontSize(isTwoPerPage ? 6 : 8);
+  doc.text("Description", baseX + 4, y + (isTwoPerPage ? 6 : 9));
+  doc.text("Amount", baseX + col1W + 4, y + (isTwoPerPage ? 6 : 9));
+  y += rowH;
+
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(0, 0, 0);
+  for (const [desc, amt] of deductionsRows) {
+    doc.text(desc, baseX + 4, y + (isTwoPerPage ? 6 : 9));
+    doc.text(amt, baseX + col1W + 4, y + (isTwoPerPage ? 6 : 9));
+    doc.setDrawColor(220, 220, 220);
+    doc.line(baseX, y + rowH, baseX + contentWidth, y + rowH);
+    y += rowH;
+  }
+  y += sectionGap;
+
+  /** Employee deductions only (matches Salary for the Period; NPF 7.5% is not net pay deduction). */
+  const totalDeductions =
+    (metrics.npf5 || 0) +
+    Number(metrics.voluntaryNpf || 0) +
+    (metrics.payeA || 0) +
+    (metrics.basicRate1 || 0) +
+    Number(metrics.otherDeductions || 0);
+
+  doc.setDrawColor(...DARK_BLUE);
+  doc.setLineWidth(0.3);
+  const summaryItems = [
+    ["Total Earnings", fmt(metrics.totalEarning)],
+    ["Total Deductions", totalDeductions.toFixed(2)],
+    ["Salary for the Period", fmt(metrics.salaryForPeriod)],
+  ];
+  for (const [label, value] of summaryItems) {
+    doc.line(baseX, y, baseX + contentWidth, y);
+    y += isTwoPerPage ? 3 : 4;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(isTwoPerPage ? 7 : 9);
+    doc.text(label, baseX, y + (isTwoPerPage ? 6 : 8));
+    doc.text(value, baseX + col1W, y + (isTwoPerPage ? 6 : 8));
+    y += isTwoPerPage ? 10 : 14;
+  }
+  doc.line(baseX, y, baseX + contentWidth, y);
+};
+
+const buildPayslipPdf = async (employee, metrics) => {
+  if (typeof window === "undefined" || !window.jspdf) {
+    const lines = buildPayslipLines(employee, metrics).map(
+      ([label, value]) => (value ? `${label}: ${value}` : label)
+    );
+    const raw = buildMinimalPdfLegacy(lines);
+    return new Blob([raw], { type: "application/pdf" });
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ format: "a4", unit: "pt" });
+  const { data: logoData, aspectRatio: logoAspect } = await loadLogoForPdf();
+  addPayslipPageToDoc(doc, employee, metrics, logoData, logoAspect, {
+    fortnightPeriod: getSelectedFortnightLabel(),
+  });
+  return doc.output("blob");
+};
+
+const buildPayslipPdfAll = async (entries) => {
+  if (typeof window === "undefined" || !window.jspdf || !entries.length) {
+    return new Blob([], { type: "application/pdf" });
+  }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ format: "a4", unit: "pt", orientation: "l" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const colGap = 20;
+  const columnWidth = (pageWidth - colGap * 3) / 2;
+
+  const { data: logoData, aspectRatio: logoAspect } = await loadLogoForPdf();
+  const fortnightPeriod = getSelectedFortnightLabel();
+
+  entries.forEach(({ employee, metrics }, i) => {
+    const colIndex = i % 2;
+    if (colIndex === 0 && i > 0) {
+      doc.addPage("a4", "l");
+    }
+    const offsetX = colGap + colIndex * (columnWidth + colGap);
+    addPayslipPageToDoc(doc, employee, metrics, logoData, logoAspect, {
+      offsetX,
+      columnWidth,
+      fortnightPeriod,
+    });
+  });
+  return doc.output("blob");
+};
+
 const buildMinimalPdfLegacy = (lines) => {
   const pageWidth = 612;
   const pageHeight = 792;
@@ -2531,7 +3713,11 @@ const buildPayrollMetricsList = async (employees, overrides) => {
   const results = [];
   for (const employee of employees) {
     const logs = await loadPayrollAttendanceForPeriod(employee.employeeId, range);
-    const metrics = buildPayrollMetrics(employee, logs, overrides);
+    const rentAllowance = await resolveRentAllowanceForFortnight(
+      employee,
+      overrides?.rentAllowance ?? employee.rentAllowance
+    );
+    const metrics = buildPayrollMetrics(employee, logs, { ...overrides, rentAllowance });
     results.push({ employee, metrics });
   }
   return results;
@@ -2550,8 +3736,8 @@ const buildPayrollReportRows = async (employees, overrides) => {
       metrics.otPay ? metrics.otPay.toFixed(2) : "0.00",
       metrics.phPay ? metrics.phPay.toFixed(2) : "0.00",
       metrics.housingAllowance ? metrics.housingAllowance.toFixed(2) : "0.00",
+      metrics.rentAllowance ? Number(metrics.rentAllowance).toFixed(2) : "0.00",
       metrics.arrears ? Number(metrics.arrears).toFixed(2) : "0.00",
-      metrics.compass ? Number(metrics.compass).toFixed(2) : "0.00",
       metrics.metLeave ? metrics.metLeave.toFixed(2) : "0.00",
       metrics.hhsAllowance ? metrics.hhsAllowance.toFixed(2) : "0.00",
       metrics.conveyanceAllowance
@@ -2571,9 +3757,6 @@ const buildPayrollReportRows = async (employees, overrides) => {
       Number.isFinite(metrics.salaryForPeriod)
         ? metrics.salaryForPeriod.toFixed(2)
         : "0.00",
-      Number.isFinite(metrics.salaryForPeriod)
-        ? Math.round(metrics.salaryForPeriod).toFixed(2)
-        : "0.00",
     ]);
   });
   return rows;
@@ -2588,8 +3771,8 @@ const getPayrollHeaders = () => [
   "OT Salary",
   "PH x 2",
   "Housing Allowance",
+  "Rent Allowance",
   "Arrears",
-  "Compass/Officiate",
   "MET Leave",
   "HHS",
   "Conveyance Allowance",
@@ -2603,7 +3786,6 @@ const getPayrollHeaders = () => [
   "Basic Rate 1%",
   "Other Deductions",
   "Salary for the Period",
-  "Salary for the Period RO",
 ];
 
 const getPayrollPageHeaders = () => [
@@ -2618,9 +3800,9 @@ const getPayrollPageHeaders = () => [
   "OT Salary",
   "PH x 2",
   "Housing Allowance",
+  "Rent Allowance",
   "Taxable Earning (A)",
   "Arrears",
-  "Compass/Officiate",
   "MET Leave",
   "Annual Leave",
   "Total Earning",
@@ -2631,7 +3813,6 @@ const getPayrollPageHeaders = () => [
   "Basic 1%",
   "Other Dedu",
   "Salary for Period",
-  "Salary for Period RO",
 ];
 
 const buildPayrollPageRow = (entry) => [
@@ -2646,9 +3827,9 @@ const buildPayrollPageRow = (entry) => [
   entry.overTimeS || "",
   entry.public || "",
   entry.housingA || "",
+  entry.rentA || "",
   entry.taxableE || "",
   entry.arrears || "",
-  entry.compassOf || "",
   entry.metLeave || "",
   entry.annual || "",
   entry.totalEa || "",
@@ -2659,7 +3840,6 @@ const buildPayrollPageRow = (entry) => [
   entry.basic1 || "",
   entry.otherDedu || "",
   entry.salaryFor || "",
-  entry.salaryForRo || "",
 ];
 
 const getAttendanceSheetHeaders = () => getPayrollPageHeaders();
@@ -2709,46 +3889,15 @@ const downloadAttendanceSheetPdf = async (entry) => {
   downloadBlob(blob, `attendance-sheet-${id}.pdf`);
 };
 
-const downloadAttendanceSheetEntryExcel = (entry) => {
+const buildAttendanceSheetEntryRow = (entry) => {
   const asM = (v) => (Number(v) || 0).toFixed(2);
-  const headers = [
-    "Employee ID",
-    "Employee Names",
-    "Cost Center",
-    ...(entry.dates || []).map((d) => `${d.dayName} ${d.dateLabel}`),
-    "Total",
-    "OT",
-    "Shift",
-    "Housing all/hr",
-    "Basic Salary",
-    "OT Salary",
-    "PH x2",
-    "Housing A",
-    "HHS",
-    "Conveyance",
-    "Arrears",
-    "Compass/Of",
-    "MET Leave",
-    "Taxable E",
-    "Annual Leave",
-    "Total Earning",
-    "NPF 5%",
-    "NPF 7.5%",
-    "Voluntary NPF",
-    "PAYE (A)",
-    "Basic 1%",
-    "Other Dedu",
-    "Salary for Period",
-    "Salary for Period RO",
-  ];
-  const row = [
+  return [
     entry.employeeId || "",
     entry.names || "",
     entry.costCenter || "",
     ...(entry.dayValues || []),
     asM(entry.totalWork),
     asM(entry.totalOvertime),
-    entry.shift || "",
     asM(entry.housingRate),
     asM(entry.basePay),
     asM(entry.otPay),
@@ -2757,7 +3906,6 @@ const downloadAttendanceSheetEntryExcel = (entry) => {
     asM(entry.hhs),
     asM(entry.conveyanceAll),
     asM(entry.arrears),
-    asM(entry.compass),
     asM(entry.metLeave),
     asM(entry.taxableEarning),
     asM(entry.annualLeave),
@@ -2769,13 +3917,59 @@ const downloadAttendanceSheetEntryExcel = (entry) => {
     asM(entry.basicRate1),
     asM(entry.otherDeductions),
     asM(entry.salaryForPeriod),
-    asM(Math.round(entry.salaryForPeriod || 0)),
   ];
+};
+
+const getAttendanceSheetEntryHeaders = (entry) => [
+  "Employee ID",
+  "Employee Names",
+  "Cost Center",
+  ...(entry.dates || []).map((d) => `${d.dayName} ${d.dateLabel}`),
+  "Total",
+  "OT",
+  "Housing all/hr",
+  "Basic Salary",
+  "OT Salary",
+  "PH x2",
+  "Housing A",
+  "HHS",
+  "Conveyance",
+  "Arrears",
+  "MET Leave",
+  "Taxable E",
+  "Annual Leave",
+  "Total Earning",
+  "NPF 5%",
+  "NPF 7.5%",
+  "Voluntary NPF",
+  "PAYE (A)",
+  "Basic 1%",
+  "Other Dedu",
+  "Salary for Period",
+];
+
+const downloadAttendanceSheetByCostCenterExcel = () => {
+  if (!attendanceSheetTable) return;
+  const rows = attendanceSheetTable.querySelectorAll("tr[data-employee-id]");
+  if (!rows || rows.length === 0) {
+    alert("No attendance data loaded. Select a fortnight and click Load Attendance first.");
+    return;
+  }
+  const entries = Array.from(rows).map((row) => buildAttendanceEntryFromRow(row));
+  if (entries.length === 0) return;
+  const firstEntry = entries[0];
+  const headers = getAttendanceSheetEntryHeaders(firstEntry);
   const escape = (value) => `"${String(value).replace(/"/g, '""')}"`;
-  const lines = [headers.map(escape).join(","), row.map(escape).join(",")];
+  const lines = [headers.map(escape).join(",")];
+  entries.forEach((entry) => {
+    const row = buildAttendanceSheetEntryRow(entry);
+    lines.push(row.map(escape).join(","));
+  });
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-  const id = entry.employeeId || "employee";
-  downloadBlob(blob, `attendance-${id}.csv`);
+  const costCenter = attendanceSheetCostCenter?.value?.trim() || "all";
+  const period = attendanceSheetFortnight?.value || "logs";
+  const safeCc = costCenter.replace(/[^a-zA-Z0-9_-]/g, "_");
+  downloadBlob(blob, `attendance-${safeCc}-${period}.csv`);
 };
 
 const downloadAttendanceSheetEntryPdf = async (entry) => {
@@ -2790,7 +3984,6 @@ const downloadAttendanceSheetEntryPdf = async (entry) => {
     "",
     `Total: ${asM(entry.totalWork)}`,
     `OT: ${asM(entry.totalOvertime)}`,
-    `Shift: ${entry.shift || ""}`,
     `Housing all/hr: ${asM(entry.housingRate)}`,
     `Basic Salary: ${asM(entry.basePay)}`,
     `OT Salary: ${asM(entry.otPay)}`,
@@ -2799,7 +3992,6 @@ const downloadAttendanceSheetEntryPdf = async (entry) => {
     `HHS: ${asM(entry.hhs)}`,
     `Conveyance: ${asM(entry.conveyanceAll)}`,
     `Arrears: ${asM(entry.arrears)}`,
-    `Compass/Of: ${asM(entry.compass)}`,
     `MET Leave: ${asM(entry.metLeave)}`,
     `Taxable E: ${asM(entry.taxableEarning)}`,
     `Annual Leave: ${asM(entry.annualLeave)}`,
@@ -2811,7 +4003,6 @@ const downloadAttendanceSheetEntryPdf = async (entry) => {
     `Basic 1%: ${asM(entry.basicRate1)}`,
     `Other Dedu: ${asM(entry.otherDeductions)}`,
     `Salary for Period: ${asM(entry.salaryForPeriod)}`,
-    `Salary for Period RO: ${asM(Math.round(entry.salaryForPeriod || 0))}`,
     "",
   ];
   (entry.dates || []).forEach((d, i) => {
@@ -2851,7 +4042,7 @@ const downloadPayrollPdf = async (employees, filename, overrides) => {
       `Basic Salary: ${metrics.basePay.toFixed(2)} | OT Salary: ${metrics.otPay.toFixed(2)} | PH x2: ${metrics.phPay.toFixed(2)}`
     );
     lines.push(
-      `Housing Allowance: ${metrics.housingAllowance.toFixed(2)} | Arrears: ${Number(metrics.arrears).toFixed(2)} | Compass: ${Number(metrics.compass).toFixed(2)}`
+      `Housing Allowance (incl. rent): ${payslipHousingWithRent(metrics).toFixed(2)} | Arrears: ${Number(metrics.arrears).toFixed(2)}`
     );
     lines.push(
       `MET: ${metrics.metLeave.toFixed(2)} | HHS: ${metrics.hhsAllowance.toFixed(2)} | Conveyance: ${metrics.conveyanceAllowance.toFixed(2)}`
@@ -2865,9 +4056,7 @@ const downloadPayrollPdf = async (employees, filename, overrides) => {
     lines.push(
       `PAYE A: ${metrics.payeA.toFixed(2)} | Basic Rate 1%: ${metrics.basicRate1.toFixed(2)} | Other: ${Number(metrics.otherDeductions).toFixed(2)}`
     );
-    lines.push(
-      `Salary for Period: ${metrics.salaryForPeriod.toFixed(2)} | Salary for Period RO: ${Math.round(metrics.salaryForPeriod).toFixed(2)}`
-    );
+    lines.push(`Salary for Period: ${metrics.salaryForPeriod.toFixed(2)}`);
     lines.push("-".repeat(80));
   });
   const blob = await buildPdfWithLogo(lines);
@@ -2927,10 +4116,13 @@ const syncEmployeeData = async () => {
       biometricMessage.textContent = `Synced ${result.employees.length} employees.`;
       const profiles = saveProfilesFromDevice(result.employees || []);
       employeesCache = mergeProfiles(result.employees || [], profiles);
+      invalidateReportPivotCache();
       updateEmployeeNameList(employeesCache);
       updatePayrollEmployeeList(employeesCache);
       updateRosterEmployeeList(employeesCache);
       renderEmployeeTable(employeesCache);
+      updateDashboardStats(employeesCache);
+      refreshDashboardPayrollIfVisible();
     } else {
       biometricMessage.textContent =
         result.message || "Employee sync failed.";
@@ -2970,8 +4162,13 @@ const syncAttendanceData = async () => {
 
     const syncedCount =
       Number(result.totalCount) || (Array.isArray(result.logs) ? result.logs.length : 0);
+    const storedRows = Number(result.storedLogs);
     await loadAttendanceFromBackend();
-    biometricMessage.textContent = `Synced ${syncedCount} attendance logs.`;
+    invalidateReportPivotCache();
+    refreshDashboardPayrollIfVisible();
+    biometricMessage.textContent = Number.isFinite(storedRows)
+      ? `Attendance merged: ${syncedCount} log(s) from device, ${storedRows} total rows stored (history before this fortnight kept).`
+      : `Synced ${syncedCount} attendance log(s) from device.`;
   } catch (error) {
     biometricMessage.textContent = "Backend is not reachable.";
   } finally {
@@ -2980,114 +4177,13 @@ const syncAttendanceData = async () => {
 };
 
 const loadAttendanceFromBackend = async () => {
-  biometricMessage.textContent = "Loading attendance logs...";
-  const defaultRange = () => {
-    const today = new Date();
-    const from = new Date(today);
-    from.setDate(today.getDate() - 14);
-    return {
-      start: formatDateForStorage(from.toISOString().slice(0, 10)),
-      end: formatDateForStorage(today.toISOString().slice(0, 10)),
-    };
-  };
-  const selectedRange =
-    attendanceFilterFrom && attendanceFilterTo
-      ? {
-          start: formatDateForStorage(attendanceFilterFrom),
-          end: formatDateForStorage(attendanceFilterTo),
-        }
-      : defaultRange();
-
-  const rangeObj = { start: selectedRange.start, end: selectedRange.end };
-  const [tableRows, allLogs] = await Promise.all([
-    loadAttendanceTableForPeriod(rangeObj),
-    loadAllAttendanceLogsForPeriod(selectedRange),
-  ]);
-
-  const workByEmployeeDate = new Map();
-  const overtimeByEmployeeDate = new Map();
-  const resolveEmployeeId = (tableUserId) => {
-    const uid = String(tableUserId || "").trim();
-    if (!uid) return null;
-    const match = employeesCache.find(
-      (e) =>
-        String(e.employeeId || "") === uid ||
-        (Number(e.employeeId) === Number(uid) && !Number.isNaN(Number(uid)))
-    );
-    if (match) return String(match.employeeId || "");
-    const numPart = uid.replace(/^[A-Za-z_-]+/, "") || uid;
-    const numMatch = employeesCache.find(
-      (e) =>
-        String(e.employeeId || "") === numPart ||
-        Number(e.employeeId) === Number(numPart)
-    );
-    return numMatch ? String(numMatch.employeeId || "") : uid;
-  };
-  tableRows.forEach((row) => {
-    const tableUserId = String(row.userId || row.employeeId || "").trim();
-    const empId = resolveEmployeeId(tableUserId) || tableUserId;
-    const dateKey = toDateKey(row.date);
-    if (!empId || !dateKey) return;
-    const rawWork = parseFloat(row.work) || 0;
-    const work = Math.min(rawWork, MAX_DAILY_HOURS);
-    const overtime = parseFloat(row.overtime) || 0;
-    workByEmployeeDate.set(`${empId}__${dateKey}`, work);
-    overtimeByEmployeeDate.set(`${empId}__${dateKey}`, overtime);
-  });
-
-  const logsByEmployee = new Map();
-  allLogs.forEach((log) => {
-    if (!log?.employeeId) return;
-    const empId = resolveEmployeeId(log.employeeId) || String(log.employeeId);
-    if (!logsByEmployee.has(empId)) logsByEmployee.set(empId, []);
-    logsByEmployee.get(empId).push(log);
-  });
-  const summariesFromLogs = [];
-  logsByEmployee.forEach((entries, employeeId) => {
-    summariesFromLogs.push(...calculateAttendanceSummary(entries));
-  });
-  summariesFromLogs.forEach((s) => {
-    const dateKey = toDateKey(s.date);
-    if (!dateKey) return;
-    const empId = resolveEmployeeId(s.employeeId) || String(s.employeeId || "");
-    const key = `${empId}__${dateKey}`;
-    if (!workByEmployeeDate.has(key)) {
-      const rawHours = s.totalHours || 0;
-      const work = Math.min(rawHours, MAX_DAILY_HOURS);
-      workByEmployeeDate.set(key, work);
-      overtimeByEmployeeDate.set(key, 0);
-    }
-  });
-
-  const range = getFortnightDateRange(
-    attendanceFortnight?.value ||
-    (attendanceFilterFrom && attendanceFilterTo ? `${attendanceFilterFrom}_${attendanceFilterTo}` : "")
-  );
-  let dateKeys = range?.dates?.map((d) => toDateKey(d.iso)).filter(Boolean) || [];
-  if (dateKeys.length === 0 && selectedRange.start && selectedRange.end) {
-    const parseDate = (s) => {
-      const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(s);
-      if (m) return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
-      const im = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-      if (im) return new Date(Number(im[1]), Number(im[2]) - 1, Number(im[3]));
-      return null;
-    };
-    const startDate = parseDate(selectedRange.start);
-    const endDate = parseDate(selectedRange.end);
-    if (startDate && endDate) {
-      const current = new Date(startDate);
-      while (current <= endDate) {
-        const iso = current.getFullYear() + "-" + String(current.getMonth() + 1).padStart(2, "0") + "-" + String(current.getDate()).padStart(2, "0");
-        dateKeys.push(toDateKey(iso));
-        current.setDate(current.getDate() + 1);
-      }
-    }
-    dateKeys = dateKeys.filter(Boolean);
-  }
+  if (biometricMessage) biometricMessage.textContent = "Loading attendance logs...";
 
   const payrollFortnightValue =
     attendanceFortnight?.value ||
+    payrollFortnight?.value ||
     (attendanceFilterFrom && attendanceFilterTo ? `${attendanceFilterFrom}_${attendanceFilterTo}` : "");
+
   const useAttendanceSheet =
     payrollFortnightValue &&
     attendanceSheetFortnightValue === payrollFortnightValue &&
@@ -3102,71 +4198,41 @@ const loadAttendanceFromBackend = async () => {
     if (freshEntries.length > 0) attendanceSheetEntries = freshEntries;
   }
 
-  const rows = [];
-  employeesCache.forEach((employee) => {
-    const employeeId = String(employee.employeeId || "");
-    let totalWork = 0;
-    let totalOvertime = 0;
-    dateKeys.forEach((dk) => {
-      totalWork += Number(workByEmployeeDate.get(`${employeeId}__${dk}`) || 0);
-      totalOvertime += Number(overtimeByEmployeeDate.get(`${employeeId}__${dk}`) || 0);
-    });
-    const attEntryFromSheet = useAttendanceSheet
-      ? attendanceSheetEntries.find((e) => String(e.employeeId || "") === employeeId)
-      : null;
-    if (attEntryFromSheet && totalWork === 0) {
-      totalWork = Number(attEntryFromSheet.totalWork || 0);
-      totalOvertime = Number(attEntryFromSheet.totalOvertime || 0);
-    }
-    totalWork = Math.min(totalWork, MAX_FORTNIGHT_HOURS);
-
-    const logs = logsByEmployee.get(employeeId) || [];
-    const shift = attEntryFromSheet?.shift || getShiftFromLogsForPeriod(logs) || todayShiftByEmployee.get(employeeId) || "";
-    let dayValues = (range?.dates || []).map((d) => {
-      const dk = toDateKey(d.iso);
-      const v = dk ? (workByEmployeeDate.get(`${employeeId}__${dk}`) || 0) : 0;
-      return v > 0 ? v.toFixed(2) : "";
-    });
-    if (attEntryFromSheet?.dayValues && dayValues.every((v) => !v) && attEntryFromSheet.dayValues.length > 0) {
-      dayValues = attEntryFromSheet.dayValues.map((v) => (v && parseFloat(v) > 0 ? String(parseFloat(v).toFixed(2)) : ""));
-    }
-
-    const manualOt = attEntryFromSheet ? Number(attEntryFromSheet.totalOvertime || 0) : totalOvertime;
-    const manualPhDo = attEntryFromSheet ? Number(attEntryFromSheet.phDo || 0) : 0;
-    const normalHours = Math.max(0, totalWork - manualOt - manualPhDo);
-    const hhs = normalHours * 0.5;
-    const basicWage = Number(employee.basicWage || 0);
-    const housingRate = Number(employee.hAllow || 0);
-    const standardMetLeave = (basicWage + housingRate) * 0.25;
-    const standardAnnualLeave = (basicWage + housingRate) * 15;
-    const calculatedConveyance = calculateConveyanceAllowanceForSpec(logs, dayValues, shift, basicWage, normalHours);
-
-    const syntheticEntry = {
-      totalWork,
-      totalOvertime: manualOt,
-      phDo: manualPhDo,
-      phPay: attEntryFromSheet ? Number(attEntryFromSheet.phPay || 0) : 0,
-      arrears: attEntryFromSheet?.arrears ?? employee.arrears ?? 0,
-      compass: attEntryFromSheet?.compass ?? employee.compass ?? 0,
-      metLeave: attEntryFromSheet ? Number(attEntryFromSheet.metLeave || 0) : standardMetLeave,
-      annualLeave: attEntryFromSheet ? Number(attEntryFromSheet.annualLeave || 0) : standardAnnualLeave,
-      hhs,
-      conveyanceAll: attEntryFromSheet ? Number(attEntryFromSheet.conveyanceAll || 0) : calculatedConveyance,
-      voluntaryNpf: employee.voluntaryNpf ?? 0,
-    };
-    rows.push(buildPayrollFromAttendanceEntry(employee, syntheticEntry));
-  });
+  const domEntries = useAttendanceSheet && attendanceSheetEntries.length > 0 ? attendanceSheetEntries : null;
+  const rows =
+    payrollFortnightValue && payrollFortnightValue.includes("_")
+      ? await buildPayrollRowsForFortnight(payrollFortnightValue, domEntries)
+      : [];
 
   attendanceLogs = rows;
   attendanceTotalPages = 1;
   attendancePage = 1;
+  syncBankAdviceFortnightFromAttendance();
   renderAttendanceTable();
-  biometricMessage.textContent =
+  if (biometricMessage) biometricMessage.textContent =
     rows.length > 0
       ? useAttendanceSheet
         ? `Payroll loaded for ${rows.length} employees (from Attendance sheet).`
-        : `Payroll loaded for ${rows.length} employees. Load Attendance sheet for same fortnight to use manual OT, PH/DO, etc.`
+        : `Payroll loaded for ${rows.length} employees. Open Attendance for the same fortnight to edit days, OT, HHS, conveyance, other deductions.`
       : "No employees found to load payroll.";
+};
+
+const loadBankAdviceLogs = async () => {
+  if (!bankAdviceFortnight?.value) {
+    alert("Select a fortnight period first.");
+    return;
+  }
+  const value = bankAdviceFortnight.value;
+  if (attendanceFortnight) attendanceFortnight.value = value;
+  const [startIso, endIso] = value.split("_");
+  attendanceFilterFrom = startIso;
+  attendanceFilterTo = endIso;
+  if (attendanceFrom) attendanceFrom.value = startIso;
+  if (attendanceTo) attendanceTo.value = endIso;
+  await loadAttendanceFromBackend();
+  const label =
+    bankAdviceFortnight.options[bankAdviceFortnight.selectedIndex]?.textContent?.trim() || value;
+  appendBankAdviceLoadLog(label, attendanceLogs.length);
 };
 
 const initBiometric = async () => {
@@ -3177,10 +4243,10 @@ const initBiometric = async () => {
     if (response.ok) {
       const serverConfig = await response.json();
       populateBiometricForm({ ...localConfig, ...serverConfig });
-      biometricMessage.textContent = "Loaded device configuration from backend.";
+      if (biometricMessage) biometricMessage.textContent = "Loaded device configuration from backend.";
     }
   } catch (error) {
-    biometricMessage.textContent =
+    if (biometricMessage) biometricMessage.textContent =
       "Loaded local configuration. Backend is not reachable.";
   }
 };
@@ -3193,6 +4259,7 @@ const loadEmployeesFromApiOrFallback = async () => {
       await loadTodayShifts();
       const profiles = saveProfilesFromDevice(result.employees || []);
       employeesCache = mergeProfiles(result.employees || [], profiles);
+      invalidateReportPivotCache();
       updateEmployeeNameList(employeesCache);
       updatePayrollEmployeeList(employeesCache);
       updateRosterEmployeeList(employeesCache);
@@ -3200,7 +4267,6 @@ const loadEmployeesFromApiOrFallback = async () => {
       updateDashboardStats(employeesCache);
       renderDashboardCharts();
       populateCostCenterFilter(attendanceSheetCostCenter);
-      populateCostCenterFilter(payrollCostCenter);
       return true;
     }
   } catch (error) {
@@ -3213,6 +4279,7 @@ const loadEmployeesFromApiOrFallback = async () => {
       await loadTodayShifts();
       const profiles = loadEmployeeProfiles();
       employeesCache = mergeProfiles(employees || [], profiles);
+      invalidateReportPivotCache();
       updateEmployeeNameList(employeesCache);
       updatePayrollEmployeeList(employeesCache);
       updateRosterEmployeeList(employeesCache);
@@ -3220,7 +4287,6 @@ const loadEmployeesFromApiOrFallback = async () => {
       updateDashboardStats(employeesCache);
       renderDashboardCharts();
       populateCostCenterFilter(attendanceSheetCostCenter);
-      populateCostCenterFilter(payrollCostCenter);
       return true;
     }
   } catch (error) {
@@ -3252,6 +4318,9 @@ const showSection = (sectionId) => {
       if (sectionId === "dashboard") {
         renderDashboardCharts();
       }
+      if (sectionId === "bank-advice") {
+        renderBankAdviceTable();
+      }
     } else {
       section.classList.add("section-hidden");
     }
@@ -3272,7 +4341,11 @@ if (navLinks) {
 showSection("dashboard");
 
 if (dashboardChartPeriod) {
-  dashboardChartPeriod.addEventListener("change", renderDashboardCharts);
+  dashboardChartPeriod.addEventListener("change", scheduleDashboardChartsFromPeriodSelect);
+}
+
+if (dashboardDownloadExcel) {
+  dashboardDownloadExcel.addEventListener("click", downloadDashboardExcel);
 }
 
 if (employeeTable) {
@@ -3437,12 +4510,14 @@ if (payslipDownloadExcel) {
     if (!selected) return;
     const range = getSelectedFortnightRange();
     const logs = await loadPayrollAttendanceForPeriod(selected.employeeId, range);
+    const rentAllowance = await resolveRentAllowanceForFortnight(selected, selected.rentAllowance);
     const metrics = buildPayrollMetrics(selected, logs, {
       publicHoliday: payrollPublicHoliday?.value === "yes",
       housingRate: payrollHousingAllowanceRateInput?.value,
       arrears: payrollArrearsInput?.value,
       compass: payrollCompassInput?.value,
       voluntaryNpf: payrollVoluntaryNpfInput?.value,
+      rentAllowance,
       otherDeductions: payrollOtherDeductionsInput?.value,
     });
     const lines = buildPayslipLines(selected, metrics);
@@ -3459,33 +4534,87 @@ if (payslipDownloadPdf) {
     if (!selected) return;
     const range = getSelectedFortnightRange();
     const logs = await loadPayrollAttendanceForPeriod(selected.employeeId, range);
+    const rentAllowance = await resolveRentAllowanceForFortnight(selected, selected.rentAllowance);
     const metrics = buildPayrollMetrics(selected, logs, {
       publicHoliday: payrollPublicHoliday?.value === "yes",
       housingRate: payrollHousingAllowanceRateInput?.value,
       arrears: payrollArrearsInput?.value,
       compass: payrollCompassInput?.value,
       voluntaryNpf: payrollVoluntaryNpfInput?.value,
+      rentAllowance,
       otherDeductions: payrollOtherDeductionsInput?.value,
     });
-    const lines = buildPayslipLines(selected, metrics).map(
-      ([label, value]) => (value ? `${label}: ${value}` : label)
-    );
-    const blob = await buildPdfWithLogo(lines);
+    const blob = await buildPayslipPdf(selected, metrics);
     downloadBlob(blob, "payslip-selected.pdf");
   });
 }
 
-saveBiometric.addEventListener("click", saveBiometricConfig);
-testBiometric.addEventListener("click", testBiometricConnection);
-syncEmployees.addEventListener("click", syncEmployeeData);
-syncAttendance.addEventListener("click", syncAttendanceData);
-loadAttendanceLogs.addEventListener("click", loadAttendanceFromBackend);
+if (saveBiometric) saveBiometric.addEventListener("click", saveBiometricConfig);
+if (testBiometric) testBiometric.addEventListener("click", testBiometricConnection);
+if (syncEmployees) syncEmployees.addEventListener("click", syncEmployeeData);
+if (syncAttendance) syncAttendance.addEventListener("click", syncAttendanceData);
+if (loadAttendanceLogs) loadAttendanceLogs.addEventListener("click", loadAttendanceFromBackend);
 if (downloadAllLogsExcel) {
   downloadAllLogsExcel.addEventListener("click", downloadAllAttendanceLogsExcel);
 }
 
+if (bankAdviceDownloadExcel) {
+  bankAdviceDownloadExcel.addEventListener("click", downloadBankAdviceExcel);
+}
+
+if (bankAdviceLoadLogs) {
+  bankAdviceLoadLogs.addEventListener("click", loadBankAdviceLogs);
+}
+
+if (bankAdviceFortnight) {
+  bankAdviceFortnight.addEventListener("change", () => {
+    renderBankAdviceTable();
+  });
+}
+
+if (downloadAllPayslipsPdf) {
+  downloadAllPayslipsPdf.addEventListener("click", async () => {
+    if (!attendanceLogs || attendanceLogs.length === 0) {
+      alert("No payroll data loaded. Click 'Load Logs' first.");
+      return;
+    }
+    const entries = [];
+    for (const log of attendanceLogs) {
+      const employeeId = String(log.employeeId || "");
+      const employee = employeesCache.find(
+        (e) => String(e.employeeId || "") === employeeId
+      ) || {
+        employeeId,
+        names: log.employeeName || "",
+        startDate: "",
+        costCenter: log.costCenter || "",
+        department: log.costCenter || "",
+        npf: log.npfNumber || "",
+        bsp: log.bspAccount || "",
+      };
+      const metrics = metricsFromPayrollLog(log, employee);
+      entries.push({ employee, metrics });
+    }
+    if (entries.length === 0) {
+      alert("No payroll rows to export.");
+      return;
+    }
+    downloadAllPayslipsPdf.disabled = true;
+    try {
+      const blob = await buildPayslipPdfAll(entries);
+      const periodLabel = getSelectedFortnightLabel().replace(/\s+/g, "-") || "payslips";
+      downloadBlob(blob, `payslips-all-${periodLabel}.pdf`);
+    } finally {
+      downloadAllPayslipsPdf.disabled = false;
+    }
+  });
+}
+
 if (loadAttendanceSheet) {
   loadAttendanceSheet.addEventListener("click", loadAttendanceSheetData);
+}
+if (downloadAttendanceByCostCenter) {
+  downloadAttendanceByCostCenter.addEventListener("click", downloadAttendanceSheetByCostCenterExcel);
 }
 
 if (attendanceSheetCostCenter) {
@@ -3521,54 +4650,153 @@ const updatePayrollRowFromVoluntaryNpfChange = (inputEl) => {
   const employeeId = inputEl.dataset.employeeId || "";
   const log = attendanceLogs?.find((item) => String(item.employeeId || "") === String(employeeId));
   if (!log) return;
-  const voluntaryNpf = parseFloat(inputEl.value) || 0;
+  const voluntaryNpfPct = parseFloat(inputEl.value) || 0;
   const totalEa = parseFloat(log.totalEa) || 0;
-  const npf5 = parseFloat(log.npf5) || 0;
-  const npf75 = parseFloat(log.npf75) || 0;
+  const basicSalary = parseFloat(log.basicSalary) || 0;
+  const otherDedu = parseFloat(row.querySelector(".payroll-otherdedu-input")?.value ?? log.otherDedu) || 0;
   const payeA = parseFloat(log.payeA) || 0;
-  const basic1 = parseFloat(log.basic1) || 0;
-  const otherDedu = parseFloat(log.otherDedu) || 0;
-  const salaryForPeriod = totalEa - npf5 - npf75 - voluntaryNpf - payeA - basic1 - otherDedu;
-  log.voluntaryN = voluntaryNpf.toFixed(2);
+  const voluntaryNpfAmount = voluntaryNpfAmountFromPercent(totalEa, voluntaryNpfPct);
+  const salaryForPeriod = computeSalaryForPeriod({
+    totalEa,
+    basicSalary,
+    voluntaryNpfPct,
+    payeA,
+    otherDeductions: otherDedu,
+  });
+  log.voluntaryNpfPct = voluntaryNpfPct;
+  log.voluntaryN = voluntaryNpfAmount.toFixed(2);
+  log.otherDedu = otherDedu.toFixed(2);
+  log.npf5 = (totalEa * 0.05).toFixed(2);
+  log.npf75 = (totalEa * 0.075).toFixed(2);
+  log.basic1 = (basicSalary * 0.01).toFixed(2);
   log.salaryFor = salaryForPeriod.toFixed(2);
-  log.salaryForRo = String(Math.round(salaryForPeriod));
   const asM = (v) => (Number(v) || 0).toFixed(2);
   const salaryForCell = row.querySelector(".payroll-salaryfor-cell");
-  const salaryForRoCell = row.querySelector(".payroll-salaryforro-cell");
   if (salaryForCell) salaryForCell.textContent = asM(salaryForPeriod);
-  if (salaryForRoCell) salaryForRoCell.textContent = String(Math.round(salaryForPeriod));
+  const tds = row.querySelectorAll("td");
+  if (tds[17]) tds[17].textContent = log.npf5;
+  if (tds[18]) tds[18].textContent = log.npf75;
+  if (tds[21]) tds[21].textContent = log.basic1;
+  renderBankAdviceTable();
+};
+
+const mergePayrollManualFromTableRows = async () => {
+  const fortnight = payrollFortnight?.value || attendanceFortnight?.value || "";
+  if (!fortnight || !attendanceTable) return null;
+  const serverAll = (await loadAttendanceSheetManualFromServer()) || {};
+  const serverPeriod =
+    serverAll && typeof serverAll === "object" ? serverAll[fortnight] || {} : {};
+  const localPeriod = loadAttendanceSheetFromStorage(fortnight) || {};
+  const merged = { ...serverPeriod, ...localPeriod };
+  attendanceTable.querySelectorAll("tr[data-employee-id]").forEach((tr) => {
+    const eid = tr.dataset.employeeId || "";
+    if (!eid) return;
+    const otherInp = tr.querySelector(".payroll-otherdedu-input");
+    const vnInp = tr.querySelector(".payroll-voluntarynpf-input");
+    const rentInp = tr.querySelector(".payroll-rent-input");
+    if (!merged[eid]) merged[eid] = {};
+    if (otherInp) merged[eid].otherDeductions = parseFloat(otherInp.value) || 0;
+    if (vnInp) merged[eid].voluntaryNpf = parseFloat(vnInp.value) || 0;
+    if (rentInp) merged[eid].rentAllowance = parseFloat(rentInp.value) || 0;
+  });
+  return { fortnight, merged };
+};
+
+const debouncedSavePayrollOtherDeductions = () => {
+  if (payrollOtherDeductionSaveTimeout) clearTimeout(payrollOtherDeductionSaveTimeout);
+  payrollOtherDeductionSaveTimeout = setTimeout(async () => {
+    payrollOtherDeductionSaveTimeout = null;
+    const result = await mergePayrollManualFromTableRows();
+    if (!result) return;
+    saveAttendanceSheetToStorage(result.fortnight, result.merged);
+    await saveAttendanceSheetManualToServer(result.fortnight, result.merged);
+  }, 400);
+};
+
+const debouncedReloadPayrollAfterRentChange = () => {
+  if (payrollRentReloadTimeout) clearTimeout(payrollRentReloadTimeout);
+  payrollRentReloadTimeout = setTimeout(async () => {
+    payrollRentReloadTimeout = null;
+    const result = await mergePayrollManualFromTableRows();
+    if (!result) return;
+    saveAttendanceSheetToStorage(result.fortnight, result.merged);
+    await saveAttendanceSheetManualToServer(result.fortnight, result.merged);
+    await loadAttendanceFromBackend();
+  }, 400);
+};
+
+const updatePayrollRowFromOtherDeduChange = (inputEl) => {
+  const row = inputEl?.closest("tr");
+  if (!row) return;
+  const employeeId = inputEl.dataset.employeeId || "";
+  const log = attendanceLogs?.find((item) => String(item.employeeId || "") === String(employeeId));
+  if (!log) return;
+  const otherDedu = parseFloat(inputEl.value) || 0;
+  const voluntaryNpfPct =
+    parseFloat(row.querySelector(".payroll-voluntarynpf-input")?.value ?? "") || 0;
+  const totalEa = parseFloat(log.totalEa) || 0;
+  const basicSalary = parseFloat(log.basicSalary) || 0;
+  const payeA = parseFloat(log.payeA) || 0;
+  const voluntaryNpfAmount = voluntaryNpfAmountFromPercent(totalEa, voluntaryNpfPct);
+  const salaryForPeriod = computeSalaryForPeriod({
+    totalEa,
+    basicSalary,
+    voluntaryNpfPct,
+    payeA,
+    otherDeductions: otherDedu,
+  });
+  log.otherDedu = otherDedu.toFixed(2);
+  log.voluntaryNpfPct = voluntaryNpfPct;
+  log.voluntaryN = voluntaryNpfAmount.toFixed(2);
+  log.npf5 = (totalEa * 0.05).toFixed(2);
+  log.npf75 = (totalEa * 0.075).toFixed(2);
+  log.basic1 = (basicSalary * 0.01).toFixed(2);
+  log.salaryFor = salaryForPeriod.toFixed(2);
+  const asM = (v) => (Number(v) || 0).toFixed(2);
+  const salaryForCell = row.querySelector(".payroll-salaryfor-cell");
+  if (salaryForCell) salaryForCell.textContent = asM(salaryForPeriod);
+  const tds = row.querySelectorAll("td");
+  if (tds[17]) tds[17].textContent = log.npf5;
+  if (tds[18]) tds[18].textContent = log.npf75;
+  if (tds[21]) tds[21].textContent = log.basic1;
+  debouncedSavePayrollOtherDeductions();
+  renderBankAdviceTable();
 };
 
 if (attendanceTable) {
   attendanceTable.addEventListener("input", (event) => {
     const target = event.target;
-    if (target?.classList?.contains("payroll-voluntarynpf-input")) {
-      updatePayrollRowFromVoluntaryNpfChange(target);
-    }
-  });
-  attendanceTable.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    const row = target.closest("tr");
-    if (!row) return;
-    const employeeId = row.dataset.employeeId || "";
-    if (!employeeId) return;
-    const entry = attendanceLogs.find(
-      (item) => String(item.employeeId || "") === String(employeeId)
-    );
-    if (!entry) return;
-
-    if (target.classList.contains("attendance-download-excel")) {
-      downloadAttendanceSheetCsv(entry);
+    if (target?.classList?.contains("payroll-rent-input")) {
+      refreshPayrollTotalsFooter();
+      debouncedReloadPayrollAfterRentChange();
       return;
     }
-    if (target.classList.contains("attendance-download-pdf")) {
-      downloadAttendanceSheetPdf(entry);
+    if (target?.classList?.contains("payroll-voluntarynpf-input")) {
+      updatePayrollRowFromVoluntaryNpfChange(target);
+      debouncedSavePayrollOtherDeductions();
+      refreshPayrollTotalsFooter();
+      return;
+    }
+    if (target?.classList?.contains("payroll-otherdedu-input")) {
+      updatePayrollRowFromOtherDeduChange(target);
+      refreshPayrollTotalsFooter();
     }
   });
 }
 
-const updateAttendanceRowCalculations = (row) => {
+const updateConveyanceFromTiers = (row) => {
+  if (!row) return;
+  if (row.dataset.conveyanceFixed === "1") return;
+  const dayInputs = row.querySelectorAll(".attendance-day-input");
+  const tierSelects = row.querySelectorAll(".attendance-conveyance-tier-select");
+  const dayValues = Array.from(dayInputs).map((inp) => inp.value.trim());
+  const tiers = Array.from(tierSelects).map((s) => clampConveyanceTier(s.value));
+  const total = computeConveyanceFromDayTiersAndHours(dayValues, tiers);
+  const conv = row.querySelector(".attendance-conveyance-input");
+  if (conv) conv.value = total > 0 ? total.toFixed(2) : "";
+};
+
+const updateAttendanceRowCalculations = (row, opts = {}) => {
   if (!row) return;
   let totalWork = 0;
   const dayInputs = row.querySelectorAll(".attendance-day-input");
@@ -3584,14 +4812,22 @@ const updateAttendanceRowCalculations = (row) => {
   const manualOt = otInput ? (parseFloat(otInput.value) || 0) : 0;
   const phDo = phDoInput ? (parseFloat(phDoInput.value) || 0) : 0;
   const normalHours = Math.max(0, totalWork - manualOt - phDo);
-  const hhsVal = normalHours * 0.5;
 
   const totalCell = row.querySelector(".attendance-total-cell");
   const normalCell = row.querySelector(".attendance-normal-cell");
-  const hhsCell = row.querySelector(".attendance-hhs-cell");
   if (totalCell) totalCell.textContent = totalWork.toFixed(2);
   if (normalCell) normalCell.textContent = normalHours.toFixed(2);
-  if (hhsCell) hhsCell.textContent = hhsVal.toFixed(2);
+
+  if (!opts.skipHhsRecalc) {
+    const costCenter = (row.querySelector("td:nth-child(3)")?.textContent?.trim() || "").toUpperCase();
+    const eligible = costCenter === "H K" || costCenter === "HK" || costCenter === "POMEC";
+    const sickInput = row.querySelector(".attendance-sick-input");
+    const sickDays = sickInput ? parseFloat(sickInput.value) || 0 : 0;
+    const hhsVal = calculateFormulaHhs(normalHours, sickDays, eligible);
+    const hhsInput = row.querySelector(".attendance-hhs-input");
+    if (hhsInput) hhsInput.value = hhsVal.toFixed(2);
+  }
+  updateConveyanceFromTiers(row);
 };
 
 const buildAttendanceEntryFromRow = (row) => {
@@ -3607,59 +4843,77 @@ const buildAttendanceEntryFromRow = (row) => {
   const dayValues = Array.from(row.querySelectorAll(".attendance-day-input")).map(
     (inp) => inp.value.trim()
   );
+  const conveyanceDayTiers = Array.from(row.querySelectorAll(".attendance-conveyance-tier-select")).map(
+    (sel) => clampConveyanceTier(sel.value)
+  );
   return {
     ...baseEntry,
     employeeId,
-    names: row.querySelector("td:nth-child(3)")?.textContent?.trim() || baseEntry.names,
-    costCenter: row.querySelector("td:nth-child(4)")?.textContent?.trim() || baseEntry.costCenter,
-    shift: row.querySelector("td:nth-child(5)")?.textContent?.trim() || baseEntry.shift,
+    names: row.querySelector("td:nth-child(2)")?.textContent?.trim() || baseEntry.names,
+    costCenter: row.querySelector("td:nth-child(3)")?.textContent?.trim() || baseEntry.costCenter,
+    shift: baseEntry.shift || "",
     dayValues,
+    conveyanceDayTiers,
     totalWork: parseFloat(row.dataset.totalWork || "0") || 0,
     totalOvertime: parseFloat(getCellText(".attendance-ot-input")) || 0,
     phDo: getCellText(".attendance-phdo-input"),
     phPay: parseFloat(getCellText(".attendance-phpay-input")) || 0,
     sickDays: getCellText(".attendance-sick-input"),
-    compassionate: getCellText(".attendance-compassionate-input"),
     metLeave: parseFloat(getCellText(".attendance-metleave-input")) || 0,
     annualLeave: parseFloat(getCellText(".attendance-annualleave-input")) || 0,
-    hhs: parseFloat(getCellText(".attendance-hhs-cell")) || 0,
-    conveyanceAll: parseFloat(getCellText(".attendance-conveyance-input") || getCellText(".attendance-conveyance-cell")) || 0,
+    hhs: parseFloat(getCellText(".attendance-hhs-input")) || 0,
+    conveyanceAll: (() => {
+      const computed = computeConveyanceFromDayTiersAndHours(
+        dayValues,
+        conveyanceDayTiers.length ? conveyanceDayTiers : dayValues.map(() => 0)
+      );
+      const fixed =
+        row.dataset.conveyanceFixed === "1" || baseEntry.conveyanceFixed === true;
+      if (fixed) {
+        const conv = row.querySelector(".attendance-conveyance-input");
+        const v = conv ? parseFloat(conv.value) : NaN;
+        return Number.isFinite(v) ? v : computed;
+      }
+      return computed;
+    })(),
   };
 };
 
-if (attendanceSheetTable) {
-  attendanceSheetTable.addEventListener("input", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    const isRelevant =
-      target.classList.contains("attendance-ot-input") ||
-      target.classList.contains("attendance-phdo-input") ||
-      target.classList.contains("attendance-day-input") ||
-      target.classList.contains("attendance-phpay-input") ||
-      target.classList.contains("attendance-sick-input") ||
-      target.classList.contains("attendance-compassionate-input") ||
-      target.classList.contains("attendance-metleave-input") ||
-      target.classList.contains("attendance-annualleave-input") ||
-      target.classList.contains("attendance-conveyance-input");
-    if (!isRelevant) return;
+const handleAttendanceSheetInput = (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  if (target.classList.contains("attendance-conveyance-tier-select")) {
     const row = target.closest("tr");
-    updateAttendanceRowCalculations(row);
+    if (!row) return;
+    delete row.dataset.conveyanceFixed;
+    updateConveyanceFromTiers(row);
     debouncedSaveAttendanceSheet();
-  });
+    return;
+  }
+  const isRelevant =
+    target.classList.contains("attendance-ot-input") ||
+    target.classList.contains("attendance-phdo-input") ||
+    target.classList.contains("attendance-day-input") ||
+    target.classList.contains("attendance-phpay-input") ||
+    target.classList.contains("attendance-sick-input") ||
+    target.classList.contains("attendance-metleave-input") ||
+    target.classList.contains("attendance-annualleave-input") ||
+    target.classList.contains("attendance-hhs-input");
+  if (!isRelevant) return;
+  const row = target.closest("tr");
+  if (!row) return;
+  if (target.classList.contains("attendance-day-input")) {
+    delete row.dataset.conveyanceFixed;
+  }
+  const skipHhsRecalc = target.classList.contains("attendance-hhs-input");
+  updateAttendanceRowCalculations(row, { skipHhsRecalc });
+  debouncedSaveAttendanceSheet();
+};
 
-  attendanceSheetTable.addEventListener("click", (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLElement)) return;
-    const row = target.closest("tr");
-    if (!row || !row.dataset.employeeId) return;
-    if (target.classList.contains("attendance-sheet-download-excel")) {
-      const entry = buildAttendanceEntryFromRow(row);
-      downloadAttendanceSheetEntryExcel(entry);
-    } else if (target.classList.contains("attendance-sheet-download-pdf")) {
-      const entry = buildAttendanceEntryFromRow(row);
-      downloadAttendanceSheetEntryPdf(entry);
-    }
-  });
+if (attendanceSheetTable) {
+  attendanceSheetTable.addEventListener("input", handleAttendanceSheetInput);
+  attendanceSheetTable.addEventListener("change", handleAttendanceSheetInput);
+
 }
 
 if (attendanceHourlyRate) {
@@ -3732,16 +4986,10 @@ const updateAttendanceDateFilters = () => {
   loadAttendanceFromBackend();
 };
 
-["payrollCostCenter", "filterTaxable", "filterArrears", "filterCompass", "filterMetLeave", "filterAnnualLeave",
-  "filterTotalEarning", "filterNpf5", "filterNpf75", "filterVoluntaryNpf", "filterPaye", "filterBasic1",
-  "filterOtherDedu", "filterSalaryForRo"].forEach((id) => {
-  const el = document.getElementById(id);
-  if (el) el.addEventListener("change", renderAttendanceTable);
-});
-
 if (attendanceFortnight) {
   attendanceFortnight.addEventListener("change", () => {
     attendancePage = 1;
+    syncBankAdviceFortnightFromAttendance();
     if (!attendanceFortnight.value) {
       attendanceFilterFrom = "";
       attendanceFilterTo = "";
