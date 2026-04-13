@@ -1,11 +1,11 @@
 const http = require("http");
-const url = require("url");
 const fs = require("fs");
 const path = require("path");
 const net = require("net");
 
 const HOST = "0.0.0.0";
 const PORT = 4000;
+const STANDARD_DAILY_HOURS = 7.5;
 const DEFAULT_BRIDGE_URL = "http://localhost:5001";
 const CONFIG_PATH = path.join(__dirname, "config.json");
 const DEVICE_DATA_PATH = path.join(__dirname, "device-data.json");
@@ -160,10 +160,19 @@ const normalizeLogDateString = (raw) => {
 /**
  * Keep device logs for dates before the current fortnight; merge incoming
  * from the current fortnight start onward so sync does not wipe history.
+ * For dates before the cutoff, incoming data fills gaps (employee+date
+ * combos not already in stored data) so previous-fortnight tail days
+ * aren't lost when the first sync happens after the fortnight rolls over.
  */
 const mergeAttendanceLogsForSync = (existing, incoming, cutoffIso) => {
   const incomingList = Array.isArray(incoming) ? incoming : [];
   const existingList = Array.isArray(existing) ? existing : [];
+  const existingKeys = new Set();
+  existingList.forEach((log) => {
+    const d = normalizeLogDateString(log?.date);
+    const eid = log?.employeeId || "";
+    if (d && eid) existingKeys.add(`${eid}__${d}`);
+  });
   const preserved = existingList.filter((log) => {
     const d = normalizeLogDateString(log?.date);
     if (!d) return true;
@@ -172,7 +181,9 @@ const mergeAttendanceLogsForSync = (existing, incoming, cutoffIso) => {
   const fromIncoming = incomingList.filter((log) => {
     const d = normalizeLogDateString(log?.date);
     if (!d) return false;
-    return d >= cutoffIso;
+    if (d >= cutoffIso) return true;
+    const eid = log?.employeeId || "";
+    return !existingKeys.has(`${eid}__${d}`);
   });
   return [...preserved, ...fromIncoming];
 };
@@ -180,6 +191,12 @@ const mergeAttendanceLogsForSync = (existing, incoming, cutoffIso) => {
 const mergeAttendanceTableRowsForSync = (existing, incoming, cutoffIso) => {
   const incomingList = Array.isArray(incoming) ? incoming : [];
   const existingList = Array.isArray(existing) ? existing : [];
+  const existingKeys = new Set();
+  existingList.forEach((row) => {
+    const d = normalizeLogDateString(row?.date);
+    const eid = String(row?.userId || row?.employeeId || "");
+    if (d && eid) existingKeys.add(`${eid}__${d}`);
+  });
   const preserved = existingList.filter((row) => {
     const d = normalizeLogDateString(row?.date);
     if (!d) return true;
@@ -188,7 +205,9 @@ const mergeAttendanceTableRowsForSync = (existing, incoming, cutoffIso) => {
   const fromIncoming = incomingList.filter((row) => {
     const d = normalizeLogDateString(row?.date);
     if (!d) return false;
-    return d >= cutoffIso;
+    if (d >= cutoffIso) return true;
+    const eid = String(row?.userId || row?.employeeId || "");
+    return !existingKeys.has(`${eid}__${d}`);
   });
   return [...preserved, ...fromIncoming];
 };
@@ -246,6 +265,35 @@ const resolveBridgeUrl = (config) => {
     process.env.BIOBRIDGE_BRIDGE_URL ||
     DEFAULT_BRIDGE_URL
   );
+};
+
+/** Parse path + query from Node's req.url using WHATWG URL (avoids deprecated url.parse). */
+const parseRequestUrl = (reqUrl) => {
+  const u = new URL(reqUrl || "/", "http://localhost");
+  const query = {};
+  u.searchParams.forEach((value, key) => {
+    query[key] = value;
+  });
+  return { pathname: u.pathname || "/", query };
+};
+
+/**
+ * BioBridge .NET SyncRequest expects int? for port / deviceNo / commKey — JSON numbers only.
+ * Config from the web UI is often stored as strings.
+ */
+const buildBridgeSyncPayload = (config) => {
+  const port = parseInt(String(config?.devicePort ?? ""), 10);
+  const deviceNo = parseInt(String(config?.deviceNo ?? ""), 10);
+  const commKey = parseInt(String(config?.deviceCommKey ?? ""), 10);
+  return {
+    deviceIp: config?.deviceIp,
+    devicePort: Number.isFinite(port) ? port : 4370,
+    deviceModel: config?.deviceModel,
+    deviceNo: Number.isFinite(deviceNo) ? deviceNo : 1,
+    deviceCommKey: Number.isFinite(commKey) ? commKey : 0,
+    mdbPath: config?.mdbPath,
+    mdbPassword: config?.mdbPassword,
+  };
 };
 
 const callBridge = async (bridgeUrl, endpoint, payload) => {
@@ -322,6 +370,61 @@ const testTcpConnection = (ip, port, timeoutMs = 2500) =>
     socket.connect(Number(port), ip);
   });
 
+/**
+ * Build attendance-table rows from raw punch logs.
+ * Uses first-to-last punch span for the day.
+ * If only one punch exists (single scan) the day is credited STANDARD_DAILY_HOURS
+ * so attendance doesn't silently drop to 0.
+ */
+const buildAttendanceTableFromLogs = (logs, nameById) => {
+  const summaryMap = new Map();
+  (logs || []).forEach((log) => {
+    const key = `${log.employeeId}__${log.date}`;
+    if (!summaryMap.has(key)) {
+      summaryMap.set(key, {
+        employeeId: log.employeeId,
+        date: log.date,
+        timeIn: log.time,
+        timeOut: log.time,
+        punchCount: 1,
+      });
+    } else {
+      const entry = summaryMap.get(key);
+      if (log.time < entry.timeIn) entry.timeIn = log.time;
+      if (log.time > entry.timeOut) entry.timeOut = log.time;
+      entry.punchCount += 1;
+    }
+  });
+
+  const toSeconds = (timeStr) => {
+    if (!timeStr) return 0;
+    const parts = String(timeStr).split(/[:\s]/).map(Number);
+    return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
+  };
+
+  return Array.from(summaryMap.values()).map((entry) => {
+    const inSec = toSeconds(entry.timeIn);
+    const outSec = toSeconds(entry.timeOut);
+    const spanSec = Math.max(0, outSec - inSec);
+    // Single punch or identical in/out → employee was present; assume standard day
+    const totalHours = entry.punchCount <= 1 || spanSec === 0
+      ? STANDARD_DAILY_HOURS
+      : spanSec / 3600;
+    const cappedHours = Math.min(totalHours, STANDARD_DAILY_HOURS);
+    const otHours = Math.max(0, totalHours - 8.5);
+    const shortHours = Math.max(0, 8.5 - totalHours);
+    return {
+      date: entry.date,
+      userId: entry.employeeId,
+      name: (nameById || new Map()).get(entry.employeeId) || "",
+      inOut: `${entry.timeIn || ""} - ${entry.timeOut || ""}`.trim(),
+      work: cappedHours.toFixed(2),
+      overtime: otHours.toFixed(2),
+      short: shortHours.toFixed(2),
+    };
+  });
+};
+
 const mimeTypes = {
   ".html": "text/html",
   ".css": "text/css",
@@ -352,7 +455,7 @@ const serveStatic = (req, res, parsed) => {
 };
 
 const server = http.createServer(async (req, res) => {
-  const parsed = url.parse(req.url, true);
+  const parsed = parseRequestUrl(req.url);
   if (serveStatic(req, res, parsed)) {
     return;
   }
@@ -374,7 +477,9 @@ const server = http.createServer(async (req, res) => {
       const { fortnightValue, data } = body || {};
       if (fortnightValue && data && typeof data === "object") {
         const existing = readAttendanceSheetManual();
-        existing[fortnightValue] = data;
+        const prevFortnight = existing[fortnightValue] || {};
+        const mergedFortnight = { ...prevFortnight, ...data };
+        existing[fortnightValue] = mergedFortnight;
         writeAttendanceSheetManual(existing);
         sendJson(res, 200, { status: "success", message: "Manual data saved." });
       } else {
@@ -437,15 +542,7 @@ const server = http.createServer(async (req, res) => {
     const config = readConfig();
     try {
       const bridgeUrl = resolveBridgeUrl(config);
-      const bridgePayload = {
-        deviceIp: config.deviceIp,
-        devicePort: config.devicePort,
-        deviceModel: config.deviceModel,
-        deviceNo: config.deviceNo,
-        deviceCommKey: config.deviceCommKey,
-        mdbPath: config.mdbPath,
-        mdbPassword: config.mdbPassword,
-      };
+      const bridgePayload = buildBridgeSyncPayload(config);
       const bridge = await callBridge(bridgeUrl, "/sync/users", bridgePayload);
       if (bridge.ok && bridge.data && bridge.data.status === "success") {
         const incomingEmployees = bridge.data.employees || [];
@@ -596,46 +693,7 @@ const server = http.createServer(async (req, res) => {
       (employees || []).forEach((e) => {
         if (e.employeeId) nameById.set(String(e.employeeId), e.names || "");
       });
-
-      const summaryMap = new Map();
-      (logs || []).forEach((log) => {
-        const key = `${log.employeeId}__${log.date}`;
-        if (!summaryMap.has(key)) {
-          summaryMap.set(key, {
-            employeeId: log.employeeId,
-            date: log.date,
-            timeIn: log.time,
-            timeOut: log.time,
-          });
-        } else {
-          const entry = summaryMap.get(key);
-          if (log.time < entry.timeIn) entry.timeIn = log.time;
-          if (log.time > entry.timeOut) entry.timeOut = log.time;
-        }
-      });
-
-      const toHours = (timeStr) => {
-        if (!timeStr) return 0;
-        const parts = String(timeStr).split(/[:\s]/).map(Number);
-        return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
-      };
-      rows = Array.from(summaryMap.values()).map((entry) => {
-        const inSec = toHours(entry.timeIn);
-        const outSec = toHours(entry.timeOut);
-        const totalSec = Math.max(0, outSec - inSec);
-        const totalHours = totalSec / 3600;
-        const otHours = Math.max(0, totalHours - 8.5);
-        const shortHours = Math.max(0, 8.5 - totalHours);
-        return {
-          date: entry.date,
-          userId: entry.employeeId,
-          name: nameById.get(entry.employeeId) || "",
-          inOut: `${entry.timeIn || ""} - ${entry.timeOut || ""}`.trim(),
-          work: totalHours.toFixed(2),
-          overtime: otHours.toFixed(2),
-          short: shortHours.toFixed(2),
-        };
-      });
+      rows = buildAttendanceTableFromLogs(logs, nameById);
     }
 
     const filtered = rows.filter((row) => {
@@ -798,15 +856,7 @@ const server = http.createServer(async (req, res) => {
     const config = readConfig();
     try {
       const bridgeUrl = resolveBridgeUrl(config);
-      const bridgePayload = {
-        deviceIp: config.deviceIp,
-        devicePort: config.devicePort,
-        deviceModel: config.deviceModel,
-        deviceNo: config.deviceNo,
-        deviceCommKey: config.deviceCommKey,
-        mdbPath: config.mdbPath,
-        mdbPassword: config.mdbPassword,
-      };
+      const bridgePayload = buildBridgeSyncPayload(config);
       const bridge = await callBridge(
         bridgeUrl,
         "/sync/attendance",
@@ -852,15 +902,7 @@ const server = http.createServer(async (req, res) => {
     const config = readConfig();
     try {
       const bridgeUrl = resolveBridgeUrl(config);
-      const bridgePayload = {
-        deviceIp: config.deviceIp,
-        devicePort: config.devicePort,
-        deviceModel: config.deviceModel,
-        deviceNo: config.deviceNo,
-        deviceCommKey: config.deviceCommKey,
-        mdbPath: config.mdbPath,
-        mdbPassword: config.mdbPassword,
-      };
+      const bridgePayload = buildBridgeSyncPayload(config);
       const bridge = await callBridge(bridgeUrl, "/sync/attendance-table", bridgePayload);
       if (bridge.ok && bridge.data && bridge.data.status === "success") {
         let rows = bridge.data.rows || [];
@@ -871,44 +913,7 @@ const server = http.createServer(async (req, res) => {
           (employees || []).forEach((e) => {
             if (e.employeeId) nameById.set(String(e.employeeId), e.names || "");
           });
-          const summaryMap = new Map();
-          (logs || []).forEach((log) => {
-            const key = `${log.employeeId}__${log.date}`;
-            if (!summaryMap.has(key)) {
-              summaryMap.set(key, {
-                employeeId: log.employeeId,
-                date: log.date,
-                timeIn: log.time,
-                timeOut: log.time,
-              });
-            } else {
-              const entry = summaryMap.get(key);
-              if (log.time < entry.timeIn) entry.timeIn = log.time;
-              if (log.time > entry.timeOut) entry.timeOut = log.time;
-            }
-          });
-          const toHours = (timeStr) => {
-            if (!timeStr) return 0;
-            const parts = String(timeStr).split(/[:\s]/).map(Number);
-            return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
-          };
-          rows = Array.from(summaryMap.values()).map((entry) => {
-            const inSec = toHours(entry.timeIn);
-            const outSec = toHours(entry.timeOut);
-            const totalSec = Math.max(0, outSec - inSec);
-            const totalHours = totalSec / 3600;
-            const otHours = Math.max(0, totalHours - 8.5);
-            const shortHours = Math.max(0, 8.5 - totalHours);
-            return {
-              date: entry.date,
-              userId: entry.employeeId,
-              name: nameById.get(entry.employeeId) || "",
-              inOut: `${entry.timeIn || ""} - ${entry.timeOut || ""}`.trim(),
-              work: totalHours.toFixed(2),
-              overtime: otHours.toFixed(2),
-              short: shortHours.toFixed(2),
-            };
-          });
+          rows = buildAttendanceTableFromLogs(logs, nameById);
         }
         const storedRows = await storeAttendanceTableData(rows);
         sendJson(res, 200, {
@@ -928,44 +933,7 @@ const server = http.createServer(async (req, res) => {
       (employees || []).forEach((e) => {
         if (e.employeeId) nameById.set(String(e.employeeId), e.names || "");
       });
-      const summaryMap = new Map();
-      (logs || []).forEach((log) => {
-        const key = `${log.employeeId}__${log.date}`;
-        if (!summaryMap.has(key)) {
-          summaryMap.set(key, {
-            employeeId: log.employeeId,
-            date: log.date,
-            timeIn: log.time,
-            timeOut: log.time,
-          });
-        } else {
-          const entry = summaryMap.get(key);
-          if (log.time < entry.timeIn) entry.timeIn = log.time;
-          if (log.time > entry.timeOut) entry.timeOut = log.time;
-        }
-      });
-      const toHours = (timeStr) => {
-        if (!timeStr) return 0;
-        const parts = String(timeStr).split(/[:\s]/).map(Number);
-        return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
-      };
-      const fallbackRows = Array.from(summaryMap.values()).map((entry) => {
-        const inSec = toHours(entry.timeIn);
-        const outSec = toHours(entry.timeOut);
-        const totalSec = Math.max(0, outSec - inSec);
-        const totalHours = totalSec / 3600;
-        const otHours = Math.max(0, totalHours - 8.5);
-        const shortHours = Math.max(0, 8.5 - totalHours);
-        return {
-          date: entry.date,
-          userId: entry.employeeId,
-          name: nameById.get(entry.employeeId) || "",
-          inOut: `${entry.timeIn || ""} - ${entry.timeOut || ""}`.trim(),
-          work: totalHours.toFixed(2),
-          overtime: otHours.toFixed(2),
-          short: shortHours.toFixed(2),
-        };
-      });
+      const fallbackRows = buildAttendanceTableFromLogs(logs, nameById);
       if (fallbackRows.length > 0) {
         const storedRows = await storeAttendanceTableData(fallbackRows);
         sendJson(res, 200, {

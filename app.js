@@ -211,6 +211,7 @@ let bankAdviceLoadLogEntries = [];
 
 const API_BASE = "http://localhost:4000";
 const MAX_DAILY_HOURS = 24;
+const STANDARD_DAILY_HOURS = 7.5;
 const MAX_FORTNIGHT_HOURS = 999;
 
 /** Per sick day, subtract this from formula HHS (H K, HK, POMEC only). */
@@ -1097,7 +1098,8 @@ const loadAttendanceSheetData = async () => {
       const dateKey = toDateKey(row.date);
       if (!empId || !dateKey) return;
       const rawWork = parseFloat(row.work) || 0;
-      const work = Math.min(rawWork, MAX_DAILY_HOURS);
+      // Cap synced/calculated hours at standard shift (7.5h); user can manually enter more
+      const work = Math.min(rawWork, STANDARD_DAILY_HOURS);
       const overtime = parseFloat(row.overtime) || 0;
       workByEmployeeDate.set(`${empId}__${dateKey}`, work);
       overtimeByEmployeeDate.set(`${empId}__${dateKey}`, overtime);
@@ -1121,7 +1123,8 @@ const loadAttendanceSheetData = async () => {
       const key = `${empId}__${dateKey}`;
       if (!workByEmployeeDate.has(key)) {
         const rawHours = s.totalHours || 0;
-        const work = Math.min(rawHours, MAX_DAILY_HOURS);
+        // Cap clock-in/out derived hours at standard shift (7.5h)
+        const work = Math.min(rawHours, STANDARD_DAILY_HOURS);
         workByEmployeeDate.set(key, work);
         overtimeByEmployeeDate.set(key, 0);
       }
@@ -1207,9 +1210,32 @@ const loadAttendanceSheetData = async () => {
   const preservedHhs = new Map();
   const preservedDayValues = new Map();
   const localData = loadAttendanceSheetFromStorage(value);
-  const serverDataForPeriod = serverManual && typeof serverManual === "object" ? (serverManual[value] || {}) : {};
-  const savedData = { ...localData, ...serverDataForPeriod };
-  if (Object.keys(serverDataForPeriod).length > 0) {
+  const serverDataForPeriod =
+    serverManual && typeof serverManual === "object" ? serverManual[value] || {} : {};
+  const savedData = mergeAttendanceSheetPeriodData(localData, serverDataForPeriod);
+  let attendanceManualMigrated = false;
+  Object.keys(savedData).forEach((eid) => {
+    const d = savedData[eid];
+    if (!d || typeof d !== "object" || !Array.isArray(d.dayValues)) return;
+    const n = range.dates.length;
+    if (d.dayValues.length !== n) return;
+    if (Array.isArray(d.dayManualFlags) && d.dayManualFlags.length === n) return;
+    const flags = range.dates.map((dt, i) => {
+      const mv = String(d.dayValues[i] ?? "").trim();
+      if (mv === "") return false;
+      const dk = toDateKey(dt.iso);
+      const sk = dk ? `${eid}__${dk}` : null;
+      const sw = sk && workByEmployeeDate.has(sk) ? workByEmployeeDate.get(sk) || 0 : 0;
+      const ss = sw > 0 ? sw.toFixed(2) : "";
+      return !sameHoursString(mv, ss);
+    });
+    d.dayManualFlags = flags;
+    attendanceManualMigrated = true;
+  });
+  if (attendanceManualMigrated) {
+    saveAttendanceSheetToStorage(value, savedData);
+    await saveAttendanceSheetManualToServer(value, savedData);
+  } else if (Object.keys(serverDataForPeriod).length > 0 || Object.keys(localData).length > 0) {
     saveAttendanceSheetToStorage(value, savedData);
   }
   Object.entries(savedData).forEach(([eid, d]) => {
@@ -1289,20 +1315,39 @@ const loadAttendanceSheetData = async () => {
     row.dataset.datesJson = JSON.stringify(range.dates.map((d) => ({ dayName: d.dayName, dateLabel: d.dateLabel })));
     const dayValues = [];
     const preservedDays = preservedDayValues.get(employeeId);
+    const savedEntry = savedData[employeeId] || {};
+    const mfSaved = savedEntry.dayManualFlags;
+    const hasDayManualFlags =
+      Array.isArray(mfSaved) && mfSaved.length === range.dates.length;
     range.dates.forEach((d, i) => {
-      if (preservedDays && preservedDays[i] !== undefined && preservedDays[i] !== "") {
-        dayValues.push(preservedDays[i]);
+      const dateKey = toDateKey(d.iso);
+      const syncKey = dateKey ? `${employeeId}__${dateKey}` : null;
+      const hasSyncData = syncKey && workByEmployeeDate.has(syncKey);
+      const syncWork = hasSyncData ? workByEmployeeDate.get(syncKey) || 0 : 0;
+      const syncStr = syncWork > 0 ? syncWork.toFixed(2) : "";
+      const presStr =
+        preservedDays && preservedDays[i] !== undefined
+          ? String(preservedDays[i]).trim()
+          : "";
+      let useManual = false;
+      if (hasDayManualFlags) {
+        useManual = mfSaved[i] === true;
       } else {
-        const dateKey = toDateKey(d.iso);
-        const rawWork = dateKey ? (workByEmployeeDate.get(`${employeeId}__${dateKey}`) || 0) : 0;
-        const work = Math.min(rawWork, MAX_DAILY_HOURS);
-        dayValues.push(work > 0 ? work.toFixed(2) : "");
+        useManual = presStr !== "" && (!hasSyncData || !sameHoursString(presStr, syncStr));
+      }
+      if (useManual) {
+        dayValues.push(presStr);
+      } else if (hasSyncData) {
+        dayValues.push(syncStr);
+      } else {
+        dayValues.push(presStr);
       }
     });
     let totalWork = 0;
     dayValues.forEach((v) => {
       const h = parseFloat(v) || 0;
-      totalWork += Math.min(h, MAX_DAILY_HOURS);
+      // No cap here — allow user-entered values above 7.5 to count fully
+      totalWork += h;
     });
     const totalWorkCapped = Math.min(totalWork, MAX_FORTNIGHT_HOURS);
     row.dataset.totalWork = String(totalWorkCapped);
@@ -1322,7 +1367,6 @@ const loadAttendanceSheetData = async () => {
     const hhsPreserved = preservedHhs.get(employeeId);
     const hhsDisplay =
       hhsPreserved !== undefined ? hhsPreserved : calculatedHhs.toFixed(2);
-    const savedEntry = savedData[employeeId] || {};
     const savedTiersFromFile = savedEntry.conveyanceDayTiers;
     const hasSavedTiers =
       Array.isArray(savedTiersFromFile) && savedTiersFromFile.length === range.dates.length;
@@ -1357,8 +1401,10 @@ const loadAttendanceSheetData = async () => {
       const t0 = tierVal === 0 ? " selected" : "";
       const t1 = tierVal === 1 ? " selected" : "";
       const t2 = tierVal === 2 ? " selected" : "";
+      const manualDayAttr =
+        hasDayManualFlags && mfSaved[i] === true ? ' data-user-edited-day="1"' : "";
       html += `<td class="${cellClass} attendance-day-cell"><div class="attendance-day-stack">
-<input type="number" class="attendance-day-input" data-employee-id="${employeeId}" data-day-index="${i}" value="${val}" placeholder="0" min="0" max="24" step="0.01" size="4" title="Hours worked" />
+<input type="number" class="attendance-day-input" data-employee-id="${employeeId}" data-day-index="${i}"${manualDayAttr} value="${val}" placeholder="0" min="0" max="24" step="0.01" size="4" title="Hours worked" />
 <select class="attendance-conveyance-tier-select" data-employee-id="${employeeId}" data-day-index="${i}" title="Conveyance: 0 = none; 1 = $7.50; 2 = $15 (counts only when hours &gt; 0)">
 <option value="0"${t0}>0</option>
 <option value="1"${t1}>1</option>
@@ -1389,6 +1435,7 @@ const loadAttendanceSheetData = async () => {
       costCenter,
       shift,
       dayValues,
+      dayManualFlags: hasDayManualFlags ? mfSaved.slice() : savedEntry.dayManualFlags,
       totalWork: totalWorkCapped,
       totalOvertime: manualOt,
       phDo: phDoVal,
@@ -1576,6 +1623,69 @@ const toDateKey = (value) => {
     return Number(`${year}${month}${day}`);
   }
   return null;
+};
+
+const sameHoursString = (a, b) => {
+  const pa = parseFloat(String(a ?? "").replace(/,/g, "")) || 0;
+  const pb = parseFloat(String(b ?? "").replace(/,/g, "")) || 0;
+  return Math.abs(pa - pb) < 0.001;
+};
+
+/** When merging server backup with localStorage, local edits must win (same employee id). */
+const mergeAttendanceSheetPeriodData = (localPeriod, serverPeriod) => {
+  const out = {};
+  const ids = new Set([
+    ...Object.keys(localPeriod || {}),
+    ...Object.keys(serverPeriod || {}),
+  ]);
+  ids.forEach((eid) => {
+    out[eid] = { ...(serverPeriod?.[eid] || {}), ...(localPeriod?.[eid] || {}) };
+  });
+  return out;
+};
+
+/**
+ * Per-day hours for payroll: sync from device/table, overridden where the user edited the sheet
+ * (dayManualFlags or legacy heuristic when saved hours differ from current sync).
+ */
+const mergeAttendanceDayRowForPayroll = (range, employeeId, workByEmployeeDate, attEntry) => {
+  const n = range.dates.length;
+  const syncRow = range.dates.map((d) => {
+    const dk = toDateKey(d.iso);
+    const v = dk ? (workByEmployeeDate.get(`${employeeId}__${dk}`) || 0) : 0;
+    return v > 0 ? v.toFixed(2) : "";
+  });
+  let total = 0;
+  if (!attEntry?.dayValues || attEntry.dayValues.length !== n) {
+    syncRow.forEach((c) => {
+      total += parseFloat(c) || 0;
+    });
+    return { dayValues: syncRow, totalWork: Math.min(total, MAX_FORTNIGHT_HOURS) };
+  }
+  const mv = attEntry.dayValues.map((x) => String(x ?? "").trim());
+  const mf = attEntry.dayManualFlags;
+  const hasMf = Array.isArray(mf) && mf.length === n;
+  const out = range.dates.map((d, i) => {
+    const dk = toDateKey(d.iso);
+    const sk = dk ? `${employeeId}__${dk}` : null;
+    const hasSync = sk && workByEmployeeDate.has(sk);
+    const sw = hasSync ? workByEmployeeDate.get(sk) || 0 : 0;
+    const ss = sw > 0 ? sw.toFixed(2) : "";
+    const pres = mv[i] ?? "";
+    let useManual = false;
+    if (hasMf) {
+      useManual = mf[i] === true;
+    } else {
+      useManual = pres !== "" && (!hasSync || !sameHoursString(pres, ss));
+    }
+    let cell = "";
+    if (useManual) cell = pres;
+    else if (hasSync) cell = ss;
+    else cell = pres;
+    total += parseFloat(cell) || 0;
+    return cell;
+  });
+  return { dayValues: out, totalWork: Math.min(total, MAX_FORTNIGHT_HOURS) };
 };
 
 const state = {
@@ -1812,7 +1922,8 @@ const buildPayrollRowsForFortnight = async (fortnightValue, domEntries = null) =
     const dateKey = toDateKey(row.date);
     if (!empId || !dateKey) return;
     const rawWork = parseFloat(row.work) || 0;
-    const work = Math.min(rawWork, MAX_DAILY_HOURS);
+    // Cap synced/calculated hours at standard shift (7.5h); user can manually enter more
+    const work = Math.min(rawWork, STANDARD_DAILY_HOURS);
     const overtime = parseFloat(row.overtime) || 0;
     workByEmployeeDate.set(`${empId}__${dateKey}`, work);
     overtimeByEmployeeDate.set(`${empId}__${dateKey}`, overtime);
@@ -1836,7 +1947,8 @@ const buildPayrollRowsForFortnight = async (fortnightValue, domEntries = null) =
     const key = `${empId}__${dateKey}`;
     if (!workByEmployeeDate.has(key)) {
       const rawHours = s.totalHours || 0;
-      const work = Math.min(rawHours, MAX_DAILY_HOURS);
+      // Cap clock-in/out derived hours at standard shift (7.5h)
+      const work = Math.min(rawHours, STANDARD_DAILY_HOURS);
       workByEmployeeDate.set(key, work);
       overtimeByEmployeeDate.set(key, 0);
     }
@@ -1846,13 +1958,19 @@ const buildPayrollRowsForFortnight = async (fortnightValue, domEntries = null) =
   const rows = [];
   employeesCache.forEach((employee) => {
     const employeeId = String(employee.employeeId || "");
-    let totalWork = 0;
     let totalOvertime = 0;
     dateKeys.forEach((dk) => {
-      totalWork += Number(workByEmployeeDate.get(`${employeeId}__${dk}`) || 0);
       totalOvertime += Number(overtimeByEmployeeDate.get(`${employeeId}__${dk}`) || 0);
     });
     const attEntryFromSheet = resolveAttendanceSheetEntry(employeeId, manualFortnight, domEntries);
+    const mergedDays = mergeAttendanceDayRowForPayroll(
+      range,
+      employeeId,
+      workByEmployeeDate,
+      attEntryFromSheet
+    );
+    let totalWork = mergedDays.totalWork;
+    let dayValues = mergedDays.dayValues;
     if (attEntryFromSheet && totalWork === 0) {
       totalWork = Number(attEntryFromSheet.totalWork || 0);
       totalOvertime = Number(attEntryFromSheet.totalOvertime || 0);
@@ -1865,20 +1983,6 @@ const buildPayrollRowsForFortnight = async (fortnightValue, domEntries = null) =
       getShiftFromLogsForPeriod(logs) ||
       todayShiftByEmployee.get(employeeId) ||
       "";
-    let dayValues = range.dates.map((d) => {
-      const dk = toDateKey(d.iso);
-      const v = dk ? (workByEmployeeDate.get(`${employeeId}__${dk}`) || 0) : 0;
-      return v > 0 ? v.toFixed(2) : "";
-    });
-    if (
-      attEntryFromSheet?.dayValues &&
-      dayValues.every((v) => !v) &&
-      attEntryFromSheet.dayValues.length > 0
-    ) {
-      dayValues = attEntryFromSheet.dayValues.map((v) =>
-        v && parseFloat(v) > 0 ? String(parseFloat(v).toFixed(2)) : ""
-      );
-    }
 
     const manualOt = attEntryFromSheet ? Number(attEntryFromSheet.totalOvertime || 0) : totalOvertime;
     const manualPhDo = attEntryFromSheet ? Number(attEntryFromSheet.phDo || 0) : 0;
@@ -1987,14 +2091,22 @@ const debouncedSaveAttendanceSheet = () => {
     attendanceSheetSaveTimeout = null;
     const value = attendanceSheetFortnight?.value || "";
     if (!value || !attendanceSheetTable) return;
-    const prevPeriod = loadAttendanceSheetFromStorage(value) || {};
+    /** Full period snapshot — never replace with only visible (filtered) rows. */
+    const periodSnapshot = loadAttendanceSheetFromStorage(value) || {};
     const data = {};
     attendanceSheetTable.querySelectorAll("tr[data-employee-id]")?.forEach((tr) => {
       const eid = tr.dataset.employeeId || "";
       if (!eid) return;
-      const prev = prevPeriod[eid] || {};
+      const prev = periodSnapshot[eid] || {};
       const dayInputs = tr.querySelectorAll(".attendance-day-input");
       const dayValues = dayInputs ? Array.from(dayInputs).map((inp) => inp.value.trim() || "") : [];
+      const dayManualFlags = dayInputs.length
+        ? Array.from(dayInputs).map(
+            (inp, i) =>
+              inp.dataset.userEditedDay === "1" ||
+              (Array.isArray(prev.dayManualFlags) && prev.dayManualFlags[i] === true)
+          )
+        : [];
       const otInput = tr.querySelector(".attendance-ot-input");
       const phDoInput = tr.querySelector(".attendance-phdo-input");
       const phPayInput = tr.querySelector(".attendance-phpay-input");
@@ -2004,6 +2116,7 @@ const debouncedSaveAttendanceSheet = () => {
       data[eid] = {
         ...prev,
         dayValues,
+        dayManualFlags,
         totalOvertime: otInput ? (parseFloat(otInput.value) || 0) : 0,
         phDo: phDoInput ? phDoInput.value.trim() : "",
         phPay: phPayInput ? (parseFloat(phPayInput.value) || 0) : 0,
@@ -2031,8 +2144,9 @@ const debouncedSaveAttendanceSheet = () => {
     if (hhsInput) data[eid].hhs = parseFloat(hhsInput.value) || 0;
     });
     if (Object.keys(data).length > 0) {
-      saveAttendanceSheetToStorage(value, data);
-      saveAttendanceSheetManualToServer(value, data);
+      const mergedPeriod = { ...periodSnapshot, ...data };
+      saveAttendanceSheetToStorage(value, mergedPeriod);
+      saveAttendanceSheetManualToServer(value, mergedPeriod);
     }
   }, 400);
 };
@@ -2356,16 +2470,20 @@ const downloadBankAdviceExcel = () => {
   }
   const period = getBankAdviceFortnightLabelText() || "fortnight";
   const sorted = sortPayrollLogsForDisplay(attendanceLogs);
+  const dataRows = sorted.map((log) => [
+    log.employeeId ?? "",
+    log.employeeName ?? "",
+    log.bspAccount ?? "",
+    log.salaryFor ?? "",
+  ]);
+  let totalSalary = 0;
+  dataRows.forEach((r) => { totalSalary += parseFloat(r[3]) || 0; });
   const wsData = [
     [`Fortnight period: ${period}`],
     [],
     ["Employee Id", "Employee Name", "BSP Account", "Salary for Period"],
-    ...sorted.map((log) => [
-      log.employeeId ?? "",
-      log.employeeName ?? "",
-      log.bspAccount ?? "",
-      log.salaryFor ?? "",
-    ]),
+    ...dataRows,
+    ["", "", "Total", totalSalary.toFixed(2)],
   ];
   const ws = XLSX.utils.aoa_to_sheet(wsData);
   const wb = XLSX.utils.book_new();
@@ -2466,21 +2584,49 @@ const calculateAttendanceSummary = (logs) => {
       .filter((log) => log.ts)
       .sort((a, b) => a.ts - b.ts);
 
-    let totalMinutes = 0;
-    let openIn = null;
+    if (sorted.length === 0) {
+      summaries.push({ employeeId, date, totalHours: 0, totalMinutes: 0 });
+      return;
+    }
 
-    sorted.forEach((log) => {
-      const state = (log.inOut || "").toLowerCase();
-      if (state.includes("in") && !state.includes("out")) {
-        openIn = log;
-        return;
-      }
-      if (state.includes("out") && openIn) {
-        const diff = Math.max(0, (log.ts - openIn.ts) / 60000);
-        totalMinutes += diff;
-        openIn = null;
-      }
+    // Try to pair in/out punches when labels are present
+    const hasLabels = sorted.some((log) => {
+      const s = (log.inOut || "").toLowerCase();
+      return s.includes("in") || s.includes("out");
     });
+
+    let totalMinutes = 0;
+
+    if (hasLabels) {
+      let openIn = null;
+      sorted.forEach((log) => {
+        const state = (log.inOut || "").toLowerCase();
+        if (state.includes("in") && !state.includes("out")) {
+          if (!openIn) openIn = log;
+          return;
+        }
+        if (state.includes("out") && openIn) {
+          const diff = Math.max(0, (log.ts - openIn.ts) / 60000);
+          totalMinutes += diff;
+          openIn = null;
+        }
+      });
+      // If an "in" punch was never closed, use first-to-last span as fallback
+      if (totalMinutes === 0 && sorted.length >= 2) {
+        totalMinutes = Math.max(0, (sorted[sorted.length - 1].ts - sorted[0].ts) / 60000);
+      }
+      // Single punch with label — treated as a present day; time unknown, give 0
+    } else {
+      // No in/out labels at all: use span from first to last punch of the day
+      if (sorted.length >= 2) {
+        totalMinutes = Math.max(0, (sorted[sorted.length - 1].ts - sorted[0].ts) / 60000);
+      }
+      // Single unlabelled punch: employee was present but duration unknown —
+      // record as present (STANDARD_DAILY_HOURS) so the day doesn't go blank
+      if (sorted.length === 1) {
+        totalMinutes = STANDARD_DAILY_HOURS * 60;
+      }
+    }
 
     const totalHours = totalMinutes / 60;
     summaries.push({
@@ -3862,11 +4008,18 @@ const downloadAllAttendanceLogsExcel = () => {
   }
   const headers = getAttendanceSheetHeaders();
   const escape = (value) => `"${String(value).replace(/"/g, '""')}"`;
+  const dataRows = attendanceLogs.map((entry) => buildAttendanceSheetRow(entry));
+  const numericStartIdx = 7;
+  const totals = new Array(headers.length).fill("");
+  totals[0] = "Total";
+  for (let col = numericStartIdx; col < headers.length; col++) {
+    let sum = 0;
+    dataRows.forEach((r) => { sum += parseFloat(r[col]) || 0; });
+    totals[col] = sum.toFixed(2);
+  }
   const lines = [headers.map(escape).join(",")];
-  attendanceLogs.forEach((entry) => {
-    const row = buildAttendanceSheetRow(entry);
-    lines.push(row.map(escape).join(","));
-  });
+  dataRows.forEach((row) => { lines.push(row.map(escape).join(",")); });
+  lines.push(totals.map(escape).join(","));
   const csv = lines.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const period = attendanceFortnight?.value || "logs";
@@ -3960,11 +4113,20 @@ const downloadAttendanceSheetByCostCenterExcel = () => {
   const firstEntry = entries[0];
   const headers = getAttendanceSheetEntryHeaders(firstEntry);
   const escape = (value) => `"${String(value).replace(/"/g, '""')}"`;
+  const dataRows = entries.map((entry) => buildAttendanceSheetEntryRow(entry));
+  const numDays = (firstEntry.dates || []).length;
+  const fixedLeadCols = 3;
+  const numericStartIdx = fixedLeadCols + numDays;
+  const totals = new Array(headers.length).fill("");
+  totals[0] = "Total";
+  for (let col = numericStartIdx; col < headers.length; col++) {
+    let sum = 0;
+    dataRows.forEach((r) => { sum += parseFloat(r[col]) || 0; });
+    totals[col] = sum.toFixed(2);
+  }
   const lines = [headers.map(escape).join(",")];
-  entries.forEach((entry) => {
-    const row = buildAttendanceSheetEntryRow(entry);
-    lines.push(row.map(escape).join(","));
-  });
+  dataRows.forEach((row) => { lines.push(row.map(escape).join(",")); });
+  lines.push(totals.map(escape).join(","));
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   const costCenter = attendanceSheetCostCenter?.value?.trim() || "all";
   const period = attendanceSheetFortnight?.value || "logs";
@@ -4018,10 +4180,17 @@ const downloadPayrollCsv = async (employees, filename, overrides) => {
   const headers = getPayrollHeaders();
   const rows = await buildPayrollReportRows(employees, overrides);
   const escape = (value) => `"${String(value).replace(/"/g, '""')}"`;
+  const numericStartIdx = 3;
+  const totals = new Array(headers.length).fill("");
+  totals[0] = "Total";
+  for (let col = numericStartIdx; col < headers.length; col++) {
+    let sum = 0;
+    rows.forEach((r) => { sum += parseFloat(r[col]) || 0; });
+    totals[col] = sum.toFixed(2);
+  }
   const lines = [headers.map(escape).join(",")];
-  rows.forEach((row) => {
-    lines.push(row.map(escape).join(","));
-  });
+  rows.forEach((row) => { lines.push(row.map(escape).join(",")); });
+  lines.push(totals.map(escape).join(","));
   const csv = lines.join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   downloadBlob(blob, filename);
@@ -4801,6 +4970,7 @@ const updateAttendanceRowCalculations = (row, opts = {}) => {
   let totalWork = 0;
   const dayInputs = row.querySelectorAll(".attendance-day-input");
   dayInputs.forEach((inp) => {
+    // Allow whatever the user typed (incl. > 7.5); only guard against 24+ per day
     const h = parseFloat(inp.value) || 0;
     totalWork += Math.min(h, MAX_DAILY_HOURS);
   });
@@ -4840,8 +5010,11 @@ const buildAttendanceEntryFromRow = (row) => {
     const el = row.querySelector(selector);
     return el ? (el.tagName === "INPUT" ? el.value : el.textContent) : "";
   };
-  const dayValues = Array.from(row.querySelectorAll(".attendance-day-input")).map(
-    (inp) => inp.value.trim()
+  const dayInputsList = row.querySelectorAll(".attendance-day-input");
+  const dayValues = Array.from(dayInputsList).map((inp) => inp.value.trim());
+  const dayManualFlags = Array.from(dayInputsList).map(
+    (inp, i) =>
+      inp.dataset.userEditedDay === "1" || baseEntry.dayManualFlags?.[i] === true
   );
   const conveyanceDayTiers = Array.from(row.querySelectorAll(".attendance-conveyance-tier-select")).map(
     (sel) => clampConveyanceTier(sel.value)
@@ -4849,6 +5022,7 @@ const buildAttendanceEntryFromRow = (row) => {
   return {
     ...baseEntry,
     employeeId,
+    dayManualFlags,
     names: row.querySelector("td:nth-child(2)")?.textContent?.trim() || baseEntry.names,
     costCenter: row.querySelector("td:nth-child(3)")?.textContent?.trim() || baseEntry.costCenter,
     shift: baseEntry.shift || "",
@@ -4903,6 +5077,7 @@ const handleAttendanceSheetInput = (event) => {
   const row = target.closest("tr");
   if (!row) return;
   if (target.classList.contains("attendance-day-input")) {
+    target.dataset.userEditedDay = "1";
     delete row.dataset.conveyanceFixed;
   }
   const skipHhsRecalc = target.classList.contains("attendance-hhs-input");

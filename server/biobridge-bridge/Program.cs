@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Runtime.InteropServices;
 using System.Data;
 using System.Data.OleDb;
@@ -12,7 +13,12 @@ service.Run();
 public class BioBridgeBridgeService
 {
     private readonly HttpListener _listener = new();
-    private readonly JsonSerializerOptions _jsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+    private readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        // Accept "4370" or 4370 from JSON (Node/config files sometimes use strings).
+        NumberHandling = JsonNumberHandling.AllowReadingFromString,
+    };
 
     public void Run()
     {
@@ -109,7 +115,10 @@ public static class ConfigLoader
         if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
         {
             var json = File.ReadAllText(path);
-            var loaded = JsonSerializer.Deserialize<BioBridgeConfig>(json);
+            var loaded = JsonSerializer.Deserialize<BioBridgeConfig>(json, new JsonSerializerOptions
+            {
+                NumberHandling = JsonNumberHandling.AllowReadingFromString,
+            });
             if (loaded != null)
             {
                 config = loaded;
