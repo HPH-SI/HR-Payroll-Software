@@ -1,0 +1,24 @@
+# Windows - Run each block in a separate PowerShell window
+# IMPORTANT: Run all lines in each block. The cd must run before the command.
+# If your project is on Desktop, use: C:\Users\user\Desktop\HR Payroll System
+
+# 1) Start the bridge (keep running)
+cd "C:\TCMS Bridge\biobridge-bridge"; dotnet run -c Release
+
+# 2) Start the Node server (keep running)
+# Adjust path if your project is elsewhere (e.g. C:\Users\user\Desktop\HR Payroll System)
+cd "C:\HR Payroll System\server"; node server.js
+
+# 3) Open the app in browser
+Start-Process "http://localhost:4000"
+
+# 4) Test bridge health
+Invoke-WebRequest -Method POST http://localhost:5001/health
+
+# Attendance sync: Ensure server\config.json has mdbPath pointing to ingress.mdb
+# Example: "mdbPath": "C:\\Program Files (x86)\\FingerTec\\FingerTec TCMS V3\\TCMS V3\\ingress.mdb"
+# If no data: sync employees first, then sync attendance. App will use device logs as fallback.
+
+# TROUBLESHOOTING: "Couldn't find a project" = wrong directory. Find your project folder, then:
+#   cd "C:\path\to\your\HR Payroll System\server"
+#   node server.js

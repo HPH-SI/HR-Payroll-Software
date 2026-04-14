@@ -478,7 +478,15 @@ const server = http.createServer(async (req, res) => {
       if (fortnightValue && data && typeof data === "object") {
         const existing = readAttendanceSheetManual();
         const prevFortnight = existing[fortnightValue] || {};
-        const mergedFortnight = { ...prevFortnight, ...data };
+        /** Deep-merge per employee so partial saves (e.g. only dayValues) do not wipe OT, PH, conveyance, etc. */
+        const mergedFortnight = { ...prevFortnight };
+        Object.entries(data).forEach(([empId, incoming]) => {
+          if (!empId || incoming == null || typeof incoming !== "object") return;
+          const prevEmp = prevFortnight[empId] && typeof prevFortnight[empId] === "object"
+            ? prevFortnight[empId]
+            : {};
+          mergedFortnight[empId] = { ...prevEmp, ...incoming };
+        });
         existing[fortnightValue] = mergedFortnight;
         writeAttendanceSheetManual(existing);
         sendJson(res, 200, { status: "success", message: "Manual data saved." });

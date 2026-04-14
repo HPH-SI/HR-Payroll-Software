@@ -1,0 +1,9 @@
+@import './styles/variables.css';
+@import './styles/app.css';
+
+/* NavLink active state for React Router */
+.main-nav a.active {
+  background: var(--primary-gradient) !important;
+  color: var(--bg-primary) !important;
+  box-shadow: 0 8px 25px rgba(30, 64, 175, 0.4);
+}
